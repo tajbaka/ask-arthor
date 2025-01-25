@@ -1,8 +1,12 @@
 from pathlib import Path
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# Try to load .env file, but don't fail if it's not available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
