@@ -133,30 +133,23 @@ def vapi_webhook(request):
         
         logger.info(f"Processing message: {message}")
         
-        # Check if we have any menu items
-        item_count = MenuItem.objects.count()
-        logger.info(f"Total menu items in database: {item_count}")
-        
         try:
-            # Search menu items using local endpoint
-            response = requests.get(
-                "http://127.0.0.1:8000/menu/search/",  # Use local URL for testing
-                params={"q": message},
-                timeout=5
-            )
-            response.raise_for_status()
-            menu_data = response.json()
-            logger.info(f"Search response: {menu_data}")
+            # Search directly using find_similar_items
+            similar_items = find_similar_items(message)
             
-            if menu_data.get("found"):
-                items = menu_data["items"]
-                menu_text = "\n".join(item["formatted"] for item in items)
+            if similar_items:
+                menu_text = "\n".join(
+                    f"{item.name} (${item.price}) - {item.description}"
+                    for item in similar_items
+                )
                 response_text = f"I found these menu items:\n\n{menu_text}\n\nWould you like to know more about any of these items?"
             else:
                 response_text = "I couldn't find any menu items matching your request. Can I help you find something else?"
 
-        except requests.RequestException as e:
-            logger.error(f"Search request failed: {str(e)}")
+            logger.info(f"Found {len(similar_items)} items")
+            
+        except Exception as e:
+            logger.error(f"Search failed: {str(e)}")
             response_text = "I'm having trouble searching our menu right now. Please try again in a moment."
 
         logger.info(f"Sending response: {response_text}")
