@@ -8,4 +8,5 @@ urlpatterns = [
     path('menu/', views.get_menu, name='get_menu'),
     path('menu/update/', views.update_menu, name='update_menu'),
     path('menu/search/', views.search_menu, name='search_menu'),
+    path('vapi/webhook/', views.vapi_webhook, name='vapi_webhook'),
 ]
