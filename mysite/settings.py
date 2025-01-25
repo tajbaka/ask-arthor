@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import logging
 
 # Try to load .env file, but don't fail if it's not available
 try:
@@ -9,6 +10,14 @@ except ImportError:
     pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+logger = logging.getLogger(__name__)
+
+# Log environment variables (safely)
+logger.info("Checking environment variables:")
+logger.info(f"OPENAI_API_KEY set: {'Yes' if os.getenv('OPENAI_API_KEY') else 'No'}")
+logger.info(f"SECRET_KEY set: {'Yes' if os.getenv('SECRET_KEY') else 'No'}")
+logger.info(f"DEBUG set: {os.getenv('DEBUG')}")
 
 SECRET_KEY = os.getenv('SECRET_KEY', '0gza9xs+2133ghyx7vhatayhrec@hc=(=*#cjx30+1fzs860+9')
 

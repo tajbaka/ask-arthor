@@ -11,11 +11,20 @@ logger = logging.getLogger(__name__)
 
 def get_client():
     """Get OpenAI client with error handling"""
-    api_key = settings.OPENAI_API_KEY
+    # Debug environment
+    logger.info("Checking OpenAI API key:")
+    env_key = os.getenv('OPENAI_API_KEY')
+    settings_key = settings.OPENAI_API_KEY
+    
+    logger.info(f"Key in env: {'Yes' if env_key else 'No'}")
+    logger.info(f"Key in settings: {'Yes' if settings_key else 'No'}")
+    
+    api_key = settings_key or env_key
     if not api_key:
-        logger.error(f"OpenAI API key not found. OPENAI_API_KEY: {api_key}")
+        logger.error("OpenAI API key not found in either settings or environment")
         raise ImproperlyConfigured("OpenAI API key is not set in environment variables")
-    logger.info("Successfully initialized OpenAI client")
+    
+    logger.info("Successfully found API key")
     return OpenAI(api_key=api_key)
 
 try:
