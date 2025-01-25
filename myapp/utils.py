@@ -13,12 +13,14 @@ def get_client():
     """Get OpenAI client with error handling"""
     api_key = settings.OPENAI_API_KEY
     if not api_key:
-        logger.error("OpenAI API key is not set")
-        raise ImproperlyConfigured("OpenAI API key is not set")
+        logger.error(f"OpenAI API key not found. OPENAI_API_KEY: {api_key}")
+        raise ImproperlyConfigured("OpenAI API key is not set in environment variables")
+    logger.info("Successfully initialized OpenAI client")
     return OpenAI(api_key=api_key)
 
 try:
     client = get_client()
+    logger.info("OpenAI client initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize OpenAI client: {str(e)}")
     raise
