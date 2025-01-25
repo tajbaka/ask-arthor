@@ -2,13 +2,17 @@ from openai import OpenAI
 import os
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.http import JsonResponse
 from .models import MenuItem
 import numpy as np
 
-if not settings.OPENAI_API_KEY:
-    raise ImproperlyConfigured("OpenAI API key is not set")
+def get_client():
+    api_key = settings.OPENAI_API_KEY
+    if not api_key:
+        raise ImproperlyConfigured("OpenAI API key is not set")
+    return OpenAI(api_key=api_key)
 
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+client = get_client()
 
 def get_embedding(text):
     """Get OpenAI embedding for text"""
@@ -19,8 +23,8 @@ def get_embedding(text):
         )
         return np.array(response.data[0].embedding)
     except Exception as e:
-        print(f"Error getting embedding: {e}")
-        raise
+        print(f"Error getting embedding: {str(e)}")
+        raise ImproperlyConfigured(f"OpenAI API error: {str(e)}")
 
 def find_similar_items(query, n=5):
     """Find n most similar menu items"""
