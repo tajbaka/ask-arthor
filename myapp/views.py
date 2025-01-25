@@ -5,6 +5,10 @@ import json
 from .models import MenuItem
 from .utils import get_embedding, find_similar_items
 from typing import Dict, List, Any
+from django.core.exceptions import ImproperlyConfigured
+import logging
+
+logger = logging.getLogger(__name__)
 
 def home(request):
     return HttpResponse("Welcome to the homepage!")
@@ -23,10 +27,38 @@ def add_menu_item(request):
     return JsonResponse({"status": "success"})
 
 def search_menu(request):
-    query = request.GET.get('q', '')
-    similar_items = find_similar_items(query)
-    results = [{"name": item.name, "price": str(item.price)} for item in similar_items]
-    return JsonResponse({"results": results})
+    """Search menu items using embeddings"""
+    try:
+        query = request.GET.get('q', '')
+        if not query:
+            return JsonResponse({
+                "status": "error",
+                "message": "Query parameter 'q' is required"
+            }, status=400)
+
+        similar_items = find_similar_items(query)
+        results = [{
+            "name": item.name,
+            "price": str(item.price),
+            "description": item.description
+        } for item in similar_items]
+        
+        return JsonResponse({
+            "status": "success",
+            "results": results
+        })
+    except ImproperlyConfigured as e:
+        logger.error(f"Configuration error: {str(e)}")
+        return JsonResponse({
+            "status": "error",
+            "message": "API configuration error"
+        }, status=500)
+    except Exception as e:
+        logger.error(f"Unexpected error in search_menu: {str(e)}")
+        return JsonResponse({
+            "status": "error",
+            "message": "Internal server error"
+        }, status=500)
 
 @csrf_exempt
 @require_http_methods(["POST"])

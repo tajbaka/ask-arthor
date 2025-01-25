@@ -5,14 +5,23 @@ from django.core.exceptions import ImproperlyConfigured
 from django.http import JsonResponse
 from .models import MenuItem
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 def get_client():
+    """Get OpenAI client with error handling"""
     api_key = settings.OPENAI_API_KEY
     if not api_key:
+        logger.error("OpenAI API key is not set")
         raise ImproperlyConfigured("OpenAI API key is not set")
     return OpenAI(api_key=api_key)
 
-client = get_client()
+try:
+    client = get_client()
+except Exception as e:
+    logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+    raise
 
 def get_embedding(text):
     """Get OpenAI embedding for text"""
@@ -23,23 +32,31 @@ def get_embedding(text):
         )
         return np.array(response.data[0].embedding)
     except Exception as e:
-        print(f"Error getting embedding: {str(e)}")
+        logger.error(f"Error getting embedding: {str(e)}")
         raise ImproperlyConfigured(f"OpenAI API error: {str(e)}")
 
 def find_similar_items(query, n=5):
     """Find n most similar menu items"""
-    query_embedding = get_embedding(query)
-    
-    # Get all menu items
-    items = MenuItem.objects.all()
-    
-    # Calculate similarities
-    similarities = []
-    for item in items:
-        if item.embedding:
-            similarity = np.dot(query_embedding, item.get_embedding())
-            similarities.append((similarity, item))
-    
-    # Sort by similarity
-    similarities.sort(reverse=True)
-    return [item for _, item in similarities[:n]] 
+    try:
+        query_embedding = get_embedding(query)
+        
+        items = MenuItem.objects.all()
+        if not items:
+            logger.warning("No menu items found in database")
+            return []
+        
+        similarities = []
+        for item in items:
+            if item.embedding:
+                similarity = np.dot(query_embedding, item.get_embedding())
+                similarities.append((similarity, item))
+        
+        if not similarities:
+            logger.warning("No items with embeddings found")
+            return []
+            
+        similarities.sort(reverse=True)
+        return [item for _, item in similarities[:n]]
+    except Exception as e:
+        logger.error(f"Error in find_similar_items: {str(e)}")
+        raise 
