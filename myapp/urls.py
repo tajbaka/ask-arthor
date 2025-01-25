@@ -5,4 +5,7 @@ app_name = 'myapp'
 
 urlpatterns = [
     path('', views.home, name='home'),
+    path('menu/', views.get_menu, name='get_menu'),
+    path('menu/update/', views.update_menu, name='update_menu'),
+    path('menu/search/', views.search_menu, name='search_menu'),
 ]
