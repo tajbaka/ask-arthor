@@ -293,123 +293,207 @@ def infer_order_from_conversation(messages) -> tuple[str, int]:
         logger.error(f"Error inferring order: {str(e)}")
         return None, 1
 
+def infer_order_changes_from_conversation(messages) -> list:
+    """Analyze conversation to infer order changes"""
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Format messages for OpenAI
+        formatted_messages = [
+            {"role": "system", "content": """You are a helpful assistant that extracts order changes from conversations. 
+             Return a JSON array of changes, each with 'action' (add/remove/modify), 'item_name', and 'quantity'.
+             Example: [{"action": "add", "item_name": "Margherita Pizza", "quantity": 2}]
+             Only return the JSON array, nothing else."""},
+        ]
+        
+        # Add conversation history
+        for msg in messages:
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+            if role and content:
+                formatted_messages.append({"role": role, "content": content})
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=formatted_messages,
+            temperature=0,
+            response_format={ "type": "json_object" }
+        )
+        
+        # Parse response
+        result = json.loads(response.choices[0].message.content)
+        return result.get('changes', [])
+        
+    except Exception as e:
+        logger.error(f"Error inferring order changes: {str(e)}")
+        return []
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def vapi_order_webhook(request):
-    """Handle VAPI order webhook requests"""
+    """Handle VAPI order webhook requests - Real-time conversation-based ordering"""
     try:
         received = json.loads(request.body)
-        logger.info(f"Received order: {json.dumps(received, indent=2)}")
+        logger.info(f"[Order Webhook] Received request: {json.dumps(received, indent=2)}")
         
         messages = received.get('messagesOpenAIFormatted', [])
+        logger.info(f"[Order Webhook] Found {len(messages)} messages in conversation")
+        
         tool_calls = received.get('message', {}).get('toolCalls', [])
         tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
+        logger.info(f"[Order Webhook] Tool Call ID: {tool_call_id}")
         
+        # Get current order or create new one
         function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
-        query = function_args.get('query', '').strip()
+        logger.info(f"[Order Webhook] Function args: {json.dumps(function_args, indent=2)}")
         
-        # If no query provided, try to infer from conversation
-        if not query and messages:
-            logger.info("No query provided, inferring from conversation...")
-            inferred_item, inferred_quantity = infer_order_from_conversation(messages)
-            if inferred_item:
-                query = inferred_item
-                function_args['quantity'] = inferred_quantity
-                logger.info(f"Inferred order: {inferred_quantity}x {inferred_item}")
+        order_id = function_args.get('order_id')
+        order = None
         
-        logger.info(f"Looking for menu item matching: '{query}'")
+        if order_id:
+            logger.info(f"[Order Webhook] Attempting to find existing order #{order_id}")
+            try:
+                order = Order.objects.get(id=order_id)
+                logger.info(f"[Order Webhook] Found existing order #{order.id}")
+            except Order.DoesNotExist:
+                logger.warning(f"[Order Webhook] Order #{order_id} not found")
+                order_id = None
         
-        if not query:
-            response_text = ("I don't see any specific order details. "
-                           "What would you like to order? You can tell me the name of the item.")
+        if not order:
+            logger.info("[Order Webhook] Creating new order")
+            order = Order.objects.create(
+                customer_name=function_args.get('customer_name', ''),
+                special_instructions=function_args.get('special_instructions', '')
+            )
+            order_id = order.id
+            logger.info(f"[Order Webhook] Created new order #{order.id}")
+        
+        # Analyze conversation to infer order changes
+        logger.info("[Order Webhook] Analyzing conversation for order changes")
+        inferred_changes = infer_order_changes_from_conversation(messages)
+        logger.info(f"[Order Webhook] Inferred changes: {json.dumps(inferred_changes, indent=2)}")
+        
+        if not inferred_changes:
+            logger.info("[Order Webhook] No changes inferred from conversation")
             return JsonResponse({
                 "results": [{
                     "toolCallId": tool_call_id,
-                    "result": response_text,
-                    "name": "order"
+                    "result": "I'm listening. What would you like to order?",
+                    "name": "order",
+                    "order_id": order_id
                 }]
             })
         
-        # First try exact text match
-        text_matches = MenuItem.objects.filter(name__icontains=query.lower())
-        logger.info(f"Found {text_matches.count()} text matches")
+        # Process each inferred change
+        response_parts = []
+        order_updated = False
         
-        if text_matches:
-            # Use the best text match
-            item = text_matches[0]
-            logger.info(f"Using exact text match: {item.name}")
-        else:
-            # Try vector similarity search with threshold
-            vector_matches = find_similar_items(query, threshold=0.7)  # Add threshold parameter
-            logger.info(f"Found {len(vector_matches)} vector matches")
+        for change in inferred_changes:
+            action = change.get('action')
+            item_name = change.get('item_name')
+            quantity = change.get('quantity', 1)
             
-            if vector_matches:
-                item = vector_matches[0]
-                logger.info(f"Using vector match: {item.name} (semantic search)")
-            else:
-                logger.warning(f"No menu items found matching: '{query}'")
-                response_text = f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
-                return JsonResponse({
-                    "results": [{
-                        "toolCallId": tool_call_id,
-                        "result": response_text,
-                        "name": "order"
-                    }]
-                })
+            logger.info(f"[Order Webhook] Processing change: {action} {quantity}x {item_name}")
+            
+            if not item_name:
+                logger.warning("[Order Webhook] Skipping change - no item name provided")
+                continue
+                
+            # Find matching menu item
+            menu_items = MenuItem.objects.filter(name__icontains=item_name.lower())
+            if not menu_items:
+                logger.info(f"[Order Webhook] No exact match for '{item_name}', trying vector search")
+                menu_items = find_similar_items(item_name, threshold=0.8)
+            
+            if not menu_items:
+                logger.warning(f"[Order Webhook] No menu items found matching '{item_name}'")
+                response_parts.append(f"I couldn't find '{item_name}' on our menu.")
+                continue
+            
+            item = menu_items[0]
+            logger.info(f"[Order Webhook] Found matching item: {item.name} (${item.price})")
+            
+            if action == 'add':
+                existing_item = order.items.filter(menu_item=item).first()
+                if existing_item:
+                    logger.info(f"[Order Webhook] Updating quantity of existing item {item.name}")
+                    existing_item.quantity += quantity
+                    existing_item.save()
+                    response_parts.append(f"Updated {item.name} quantity to {existing_item.quantity}")
+                else:
+                    logger.info(f"[Order Webhook] Adding new item {item.name}")
+                    OrderItem.objects.create(
+                        order=order,
+                        menu_item=item,
+                        quantity=quantity,
+                        item_name=item.name,
+                        item_price=item.price
+                    )
+                    response_parts.append(f"Added {quantity}x {item.name}")
+                order_updated = True
+                
+            elif action == 'remove':
+                logger.info(f"[Order Webhook] Removing {item.name} from order")
+                removed = order.items.filter(menu_item=item).delete()
+                if removed[0] > 0:
+                    response_parts.append(f"Removed {item.name} from your order")
+                    order_updated = True
+                else:
+                    logger.warning(f"[Order Webhook] Item {item.name} not found in order to remove")
+                    
+            elif action == 'modify':
+                existing_item = order.items.filter(menu_item=item).first()
+                if existing_item:
+                    logger.info(f"[Order Webhook] Modifying quantity of {item.name} to {quantity}")
+                    existing_item.quantity = quantity
+                    existing_item.save()
+                    response_parts.append(f"Updated {item.name} quantity to {quantity}")
+                    order_updated = True
+                else:
+                    logger.warning(f"[Order Webhook] Item {item.name} not found in order to modify")
+                    response_parts.append(f"I couldn't find {item.name} in your order to modify")
         
-        quantity = max(1, int(function_args.get('quantity', 1)))  # Ensure minimum quantity of 1
+        if order_updated:
+            # Recalculate order total
+            total = sum(item.quantity * item.item_price for item in order.items.all())
+            order.total_amount = total
+            order.save()
+            logger.info(f"[Order Webhook] Updated order total to ${total}")
+            
+            # Broadcast order update via WebSocket
+            logger.info("[Order Webhook] Broadcasting order update via WebSocket")
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "orders",
+                {
+                    "type": "orders_update",
+                    "orders": async_to_sync(OrderConsumer().get_orders)()
+                }
+            )
         
-        order = Order.objects.create(
-            customer_name=function_args.get('customer_name', ''),
-            special_instructions=function_args.get('special_instructions', '')
-        )
+        response_text = " ".join(response_parts) if response_parts else "Your order is unchanged."
+        if order.items.exists():
+            response_text += f"\nYour current order total is ${order.total_amount}"
         
-        # Create order item
-        order_item = OrderItem.objects.create(
-            order=order,
-            menu_item=item,
-            quantity=quantity,
-            item_name=item.name,
-            item_price=item.price
-        )
-        
-        # Update order total
-        order.total_amount = item.price * quantity
-        order.save()
-        
-        logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{quantity}")
-        
-        # Broadcast order update via WebSocket
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "orders",
-            {
-                "type": "orders_update",
-                "orders": async_to_sync(OrderConsumer().get_orders)()
-            }
-        )
-        
-        response_text = (f"I've created order #{order.id} for {quantity}x {item.name}. "
-                        f"Total amount: ${order.total_amount}")
-        
+        logger.info(f"[Order Webhook] Sending response: {response_text}")
         return JsonResponse({
             "results": [{
                 "toolCallId": tool_call_id,
                 "result": response_text,
-                "name": "order"
+                "name": "order",
+                "order_id": order_id
             }]
         })
             
     except Exception as e:
-        logger.error(f"Order webhook error: {str(e)}")
-        response = {
+        logger.error(f"[Order Webhook] Error: {str(e)}", exc_info=True)
+        return JsonResponse({
             "results": [{
                 "toolCallId": tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
                 "result": "Sorry, I'm having trouble processing your order right now.",
                 "name": "order"
             }]
-        }
-        return JsonResponse(response)
+        })
 
 @require_http_methods(["GET"])
 def get_orders(request) -> JsonResponse:
