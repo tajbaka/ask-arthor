@@ -14,4 +14,6 @@ urlpatterns = [
     path('menu/replace/', views.replace_menu, name='replace_menu'),
     path('orders/', views.get_orders, name='get_orders'),
     path('orders/<int:order_id>/', views.get_order, name='get_order'),
+    path('orders/clear/', views.clear_orders, name='clear_orders'),
+    path('orders/<int:order_id>/delete/', views.delete_order, name='delete_order'),
 ]

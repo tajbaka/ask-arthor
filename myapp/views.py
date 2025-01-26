@@ -306,7 +306,7 @@ def vapi_order_webhook(request):
         tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
         function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
-        query = function_args.get('query', '')
+        query = function_args.get('query', '').strip()
         
         # If no query provided, try to infer from conversation
         if not query and messages:
@@ -319,69 +319,82 @@ def vapi_order_webhook(request):
         
         logger.info(f"Looking for menu item matching: '{query}'")
         
-        if query:
-            # Create a new order
-            order = Order.objects.create(
-                customer_name=function_args.get('customer_name', '')
-            )
-            
-            # Try to find matching menu item
-            menu_items = MenuItem.objects.filter(name__icontains=query.lower())
-            logger.info(f"Found {menu_items.count()} matching menu items")
-            
-            if menu_items:
-                item = menu_items[0]
-                logger.info(f"Selected menu item: {item.name} (${item.price})")
-                
-                # Create order item
-                order_item = OrderItem.objects.create(
-                    order=order,
-                    menu_item=item,
-                    quantity=function_args.get('quantity', 1),
-                    item_name=item.name,
-                    item_price=item.price
-                )
-                
-                # Update order total
-                order.total_amount = item.price * function_args.get('quantity', 1)
-                order.save()
-                
-                logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{order_item.quantity}")
-                
-                # Broadcast order update via WebSocket
-                channel_layer = get_channel_layer()
-                async_to_sync(channel_layer.group_send)(
-                    "orders",
-                    {
-                        "type": "orders_update",
-                        "orders": async_to_sync(OrderConsumer().get_orders)()
-                    }
-                )
-                
-                response_text = (f"I've created order #{order.id} for {item.name}. "
-                               f"Total amount: ${order.total_amount}")
-            else:
-                logger.warning(f"No menu items found matching: '{query}'")
-                response_text = f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
-        else:
+        if not query:
             response_text = ("I don't see any specific order details. "
                            "What would you like to order? You can tell me the name of the item.")
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": response_text,
+                    "name": "order"
+                }]
+            })
         
-        response = {
+        # Try to find matching menu item
+        menu_items = MenuItem.objects.filter(name__icontains=query.lower())
+        logger.info(f"Found {menu_items.count()} matching menu items")
+        
+        if not menu_items:
+            logger.warning(f"No menu items found matching: '{query}'")
+            response_text = f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": response_text,
+                    "name": "order"
+                }]
+            })
+            
+        # Create order only if we have a valid menu item
+        item = menu_items[0]
+        quantity = max(1, int(function_args.get('quantity', 1)))  # Ensure minimum quantity of 1
+        
+        order = Order.objects.create(
+            customer_name=function_args.get('customer_name', ''),
+            special_instructions=function_args.get('special_instructions', '')
+        )
+        
+        # Create order item
+        order_item = OrderItem.objects.create(
+            order=order,
+            menu_item=item,
+            quantity=quantity,
+            item_name=item.name,
+            item_price=item.price
+        )
+        
+        # Update order total
+        order.total_amount = item.price * quantity
+        order.save()
+        
+        logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{quantity}")
+        
+        # Broadcast order update via WebSocket
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "orders",
+            {
+                "type": "orders_update",
+                "orders": async_to_sync(OrderConsumer().get_orders)()
+            }
+        )
+        
+        response_text = (f"I've created order #{order.id} for {quantity}x {item.name}. "
+                        f"Total amount: ${order.total_amount}")
+        
+        return JsonResponse({
             "results": [{
                 "toolCallId": tool_call_id,
                 "result": response_text,
                 "name": "order"
             }]
-        }
-        
-        return JsonResponse(response)
+        })
             
     except Exception as e:
         logger.error(f"Order webhook error: {str(e)}")
         response = {
             "results": [{
-                "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+                "toolCallId": tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
                 "result": "Sorry, I'm having trouble processing your order right now.",
                 "name": "order"
             }]
@@ -481,6 +494,73 @@ def get_order(request, order_id: int) -> JsonResponse:
         }, status=404)
     except Exception as e:
         logger.error(f"Get order error: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def clear_orders(request) -> JsonResponse:
+    """Clear all orders from the database"""
+    try:
+        # Delete all orders (this will cascade delete order items)
+        count = Order.objects.count()
+        Order.objects.all().delete()
+        
+        # Broadcast empty orders list via WebSocket
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "orders",
+            {
+                "type": "orders_update",
+                "orders": []
+            }
+        )
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Successfully cleared {count} orders',
+            'cleared_count': count
+        })
+    
+    except Exception as e:
+        logger.error(f"Clear orders error: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def delete_order(request, order_id: int) -> JsonResponse:
+    """Delete a specific order by ID"""
+    try:
+        order = Order.objects.get(id=order_id)
+        order.delete()
+        
+        # Broadcast updated orders list via WebSocket
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "orders",
+            {
+                "type": "orders_update",
+                "orders": async_to_sync(OrderConsumer().get_orders)()
+            }
+        )
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Successfully deleted order #{order_id}',
+            'deleted_id': order_id
+        })
+    except Order.DoesNotExist:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Order with id {order_id} not found'
+        }, status=404)
+    except Exception as e:
+        logger.error(f"Delete order error: {str(e)}")
         return JsonResponse({
             'status': 'error',
             'message': str(e)
