@@ -269,9 +269,15 @@ def vapi_order_webhook(request):
         tool_calls = received.get('message', {}).get('toolCalls', [])
         tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
-        # For now, just acknowledge the order
-        response_text = "Thank you for your order! I've received the following details:\n\n"
-        response_text += json.dumps(received, indent=2)
+        # Check if we have any order details
+        function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
+        
+        if not function_args:
+            response_text = ("I don't see any order details. Please specify what items you'd like to order. "
+                           "You can tell me the name of the item and quantity you want.")
+        else:
+            response_text = "Thank you for your order! I've received the following details:\n\n"
+            response_text += json.dumps(function_args, indent=2)
         
         response = {
             "results": [{
@@ -281,7 +287,6 @@ def vapi_order_webhook(request):
             }]
         }
         
-        # logger.info(f"Order Response: {json.dumps(response)}")
         return JsonResponse(response)
             
     except Exception as e:
@@ -293,5 +298,4 @@ def vapi_order_webhook(request):
                 "name": "order"
             }]
         }
-        logger.info(f"Error Response: {json.dumps(response)}")
         return JsonResponse(response)
