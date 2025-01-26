@@ -6,6 +6,8 @@ from django.http import JsonResponse
 from .models import MenuItem
 import numpy as np
 import logging
+from typing import List
+from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -46,28 +48,30 @@ def get_embedding(text):
         logger.error(f"Error getting embedding: {str(e)}")
         raise ImproperlyConfigured(f"OpenAI API error: {str(e)}")
 
-def find_similar_items(query, n=5):
-    """Find n most similar menu items"""
+def find_similar_items(query: str, threshold: float = 0.7) -> List[MenuItem]:
+    """Find menu items similar to query using embeddings"""
     try:
+        # Get query embedding
         query_embedding = get_embedding(query)
         
+        # Get all menu items
         items = MenuItem.objects.all()
-        if not items:
-            logger.warning("No menu items found in database")
-            return []
         
-        similarities = []
+        # Calculate similarities and filter by threshold
+        similar_items = []
         for item in items:
-            if item.embedding:
-                similarity = np.dot(query_embedding, item.get_embedding())
-                similarities.append((similarity, item))
+            item_embedding = item.get_embedding()
+            if item_embedding:
+                similarity = cosine_similarity(query_embedding, item_embedding)
+                if similarity >= threshold:
+                    similar_items.append((item, similarity))
         
-        if not similarities:
-            logger.warning("No items with embeddings found")
-            return []
-            
-        similarities.sort(reverse=True)
-        return [item for _, item in similarities[:n]]
+        # Sort by similarity score
+        similar_items.sort(key=lambda x: x[1], reverse=True)
+        
+        # Return just the items, without scores
+        return [item for item, _ in similar_items]
+        
     except Exception as e:
-        logger.error(f"Error in find_similar_items: {str(e)}")
-        raise 
+        logger.error(f"Similarity search error: {str(e)}")
+        return [] 

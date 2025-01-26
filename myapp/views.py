@@ -330,32 +330,32 @@ def vapi_order_webhook(request):
                 }]
             })
         
-        # Try to find matching menu item using both text and vector search
+        # First try exact text match
         text_matches = MenuItem.objects.filter(name__icontains=query.lower())
-        vector_matches = find_similar_items(query)  # Using existing embedding search
+        logger.info(f"Found {text_matches.count()} text matches")
         
-        logger.info(f"Found {text_matches.count()} text matches and {len(vector_matches)} vector matches")
-        
-        # Combine and deduplicate matches
-        menu_items = list(text_matches)
-        for item in vector_matches:
-            if item not in menu_items:
-                menu_items.append(item)
-        
-        if not menu_items:
-            logger.warning(f"No menu items found matching: '{query}'")
-            response_text = f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": response_text,
-                    "name": "order"
-                }]
-            })
+        if text_matches:
+            # Use the best text match
+            item = text_matches[0]
+            logger.info(f"Using exact text match: {item.name}")
+        else:
+            # Try vector similarity search with threshold
+            vector_matches = find_similar_items(query, threshold=0.7)  # Add threshold parameter
+            logger.info(f"Found {len(vector_matches)} vector matches")
             
-        # Use the first match (could be from either search method)
-        item = menu_items[0]
-        logger.info(f"Selected menu item: {item.name} (matched via {'text' if item in text_matches else 'vector'} search)")
+            if vector_matches:
+                item = vector_matches[0]
+                logger.info(f"Using vector match: {item.name} (semantic search)")
+            else:
+                logger.warning(f"No menu items found matching: '{query}'")
+                response_text = f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
+                return JsonResponse({
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": response_text,
+                        "name": "order"
+                    }]
+                })
         
         quantity = max(1, int(function_args.get('quantity', 1)))  # Ensure minimum quantity of 1
         
