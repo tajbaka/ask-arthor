@@ -2,7 +2,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 import json
-from .models import MenuItem, Order, OrderItem
+from .models import MenuItem, Order
 from .utils import get_embedding, find_similar_items
 from typing import Dict, List, Any, Optional
 from django.core.exceptions import ImproperlyConfigured
@@ -366,71 +366,47 @@ def vapi_order_webhook(request):
     """Handle VAPI order webhook requests"""
     try:
         received = json.loads(request.body)
-        # logger.info(f"Received order: {json.dumps(received, indent=2)}")
         
-        # Get addorder tool call
         order_tool_call = get_tool_call(received, 'addorder')
-        
-        # Validate tool calls
         if not order_tool_call:
-            logger.warning("No order tool call found in request")
             return create_error_response(
                 "0dca5b3f-59c3-4236-9784-84e560fb26ef",
                 "What would you like to order from our menu?"
             )
             
         tool_call_id = order_tool_call['id']
-        
-        # Parse arguments
         query, quantity = parse_tool_call_arguments(order_tool_call, 'order')
         
-        # Validate query
         if not query:
-            logger.warning("No order query provided")
             return create_error_response(
                 tool_call_id,
                 "What would you like to order from our menu?"
             )
             
-        # Find matching menu item
         similar_items = find_similar_items(query)
         if not similar_items:
-            logger.warning(f"No menu items found matching: '{query}'")
             return create_error_response(
                 tool_call_id,
                 f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
             )
             
-        # Use the best match
-        item = similar_items[0]
-        logger.info(f"Found matching menu item: {item.name}")
+        menu_item = similar_items[0]
         
-        # Create order
+        # Create order with direct menu item reference
         order = Order.objects.create(
+            menu_item=menu_item,
+            quantity=quantity,
+            item_name=menu_item.name,
+            item_price=menu_item.price,
             customer_name=order_tool_call.get('function', {}).get('arguments', {}).get('customer_name', '').strip(),
             special_instructions=order_tool_call.get('function', {}).get('arguments', {}).get('special_instructions', '').strip()
         )
         
-        # Create order item
-        order_item = OrderItem.objects.create(
-            order=order,
-            menu_item=item,
-            quantity=quantity,
-            item_name=item.name,
-            item_price=item.price
-        )
+        logger.info(f"Created order #{order.id} for {quantity}x {menu_item.name}")
         
-        # Update order total
-        order.total_amount = item.price * quantity
-        order.save()
-        
-        logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{quantity}")
-        
-        # Broadcast update
         broadcast_order_update()
         
-        # Prepare response
-        response_text = (f"I've created order #{order.id} for {quantity}x {item.name}. "
+        response_text = (f"I've created order #{order.id} for {quantity}x {menu_item.name}. "
                         f"Total amount: ${order.total_amount}")
         
         return JsonResponse({
@@ -439,7 +415,7 @@ def vapi_order_webhook(request):
                 "result": response_text,
                 "name": "order",
                 "order_id": str(order.id),
-                "menu_item_id": str(item.id),
+                "menu_item_id": str(menu_item.id),
                 "quantity": quantity
             }]
         })
@@ -477,13 +453,6 @@ def get_orders(request) -> JsonResponse:
         
         orders_list = []
         for order in orders:
-            order_items = [{
-                'item_name': item.item_name,
-                'quantity': item.quantity,
-                'price': str(item.item_price),
-                'special_instructions': item.special_instructions
-            } for item in order.items.all()]
-            
             orders_list.append({
                 'id': order.id,
                 'status': order.status,
@@ -491,7 +460,9 @@ def get_orders(request) -> JsonResponse:
                 'created_at': order.created_at.isoformat(),
                 'total_amount': str(order.total_amount),
                 'special_instructions': order.special_instructions,
-                'items': order_items
+                'item_name': order.item_name,
+                'quantity': order.quantity,
+                'item_price': str(order.item_price)
             })
         
         return JsonResponse({
@@ -518,13 +489,6 @@ def get_order(request, order_id: int) -> JsonResponse:
     try:
         order = Order.objects.get(id=order_id)
         
-        order_items = [{
-            'item_name': item.item_name,
-            'quantity': item.quantity,
-            'price': str(item.item_price),
-            'special_instructions': item.special_instructions
-        } for item in order.items.all()]
-        
         return JsonResponse({
             'status': 'success',
             'order': {
@@ -534,7 +498,10 @@ def get_order(request, order_id: int) -> JsonResponse:
                 'created_at': order.created_at.isoformat(),
                 'total_amount': str(order.total_amount),
                 'special_instructions': order.special_instructions,
-                'items': order_items
+                'menu_item_id': str(order.menu_item.id) if order.menu_item else None,
+                'item_name': order.item_name,
+                'quantity': order.quantity,
+                'item_price': str(order.item_price)
             }
         })
     except Order.DoesNotExist:
@@ -622,93 +589,55 @@ def vapi_remove_order_webhook(request):
     """Handle VAPI remove order webhook requests"""
     try:
         received = json.loads(request.body)
-        # logger.info(f"Received remove order request: {json.dumps(received, indent=2)}")
         
-        # Get removeorder tool call using helper function
         remove_tool_call = get_tool_call(received, 'removeorder')
-        
-        # Validate tool calls
         if not remove_tool_call:
-            logger.warning("No remove order tool call found in request")
             return create_error_response(
                 "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                "Which item would you like to remove from your order?"
+                "Which order would you like to remove?"
             )
             
         tool_call_id = remove_tool_call['id']
         
-        # Parse arguments using helper function
-        query, quantity = parse_tool_call_arguments(remove_tool_call, 'remove')
+        # Get the order ID from arguments
+        function_args = remove_tool_call.get('function', {}).get('arguments', {})
+        if isinstance(function_args, str):
+            function_args = json.loads(function_args)
         
-        # Validate query
-        if not query:
-            logger.warning("No item specified for removal")
+        order_data = function_args.get('Order', {})
+        order_id = order_data.get('id')
+        
+        if not order_id:
             return create_error_response(
                 tool_call_id,
-                "Which item would you like to remove from your order?"
+                "Which order would you like to remove?"
             )
         
-        # Get current order and log its items
-        current_order = Order.objects.first()
-        if not current_order:
-            logger.warning("No current order found")
-            return create_error_response(
-                tool_call_id,
-                "There are no active orders to remove items from."
-            )
+        try:
+            order = Order.objects.get(id=order_id)
+            item_name = order.item_name
+            order.delete()
             
-        logger.info("Current order items:")
-        for item in current_order.items.all():
-            logger.info(f"- {item.item_name} (id: {item.id})")
-        
-        # Find matching items in the order using similarity search
-        similar_items = find_similar_items(query)
-        matching_items = current_order.items.filter(item_name__in=[item.name for item in similar_items])
-        
-        if not matching_items:
-            logger.warning(f"No items found matching: '{query}'")
+            broadcast_order_update()
+            
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": f"I've removed order #{order_id} ({item_name}).",
+                    "name": "order",
+                    "order_id": str(order_id)
+                }]
+            })
+            
+        except Order.DoesNotExist:
             return create_error_response(
                 tool_call_id,
-                f"I couldn't find '{query}' in your current order. Would you like to see your order?"
+                f"I couldn't find order #{order_id}. Would you like to see your current orders?"
             )
-            
-        # Remove the first matching item
-        item = matching_items[0]
-        item_name = item.item_name
-        menu_item_id = str(item.menu_item.id) if item.menu_item else None
-        logger.info(f"Removing item: {item_name} (menu_item_id: {menu_item_id})")
-        
-        # Delete the item
-        item.delete()
-        logger.info("Item deleted from database")
-        
-        # Update order total
-        current_order.total_amount = sum(
-            item.item_price * item.quantity 
-            for item in current_order.items.all()
-        )
-        current_order.save()
-        
-        # Broadcast update
-        broadcast_order_update()
-        
-        response_text = (f"I've removed {item_name} from your order. "
-                       f"New total: ${current_order.total_amount}")
-        
-        return JsonResponse({
-            "results": [{
-                "toolCallId": tool_call_id,
-                "result": response_text,
-                "name": "order",
-                "order_id": str(current_order.id),
-                "menu_item_id": menu_item_id,
-                "quantity": quantity
-            }]
-        })
             
     except Exception as e:
         logger.error(f"Remove order webhook error: {str(e)}", exc_info=True)
         return create_error_response(
             tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-            "Sorry, I'm having trouble removing items from your order right now."
+            "Sorry, I'm having trouble removing the order right now."
         )

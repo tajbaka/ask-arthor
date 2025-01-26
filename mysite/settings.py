@@ -119,8 +119,13 @@ API_BASE_URL = os.getenv('API_BASE_URL', 'http://127.0.0.1:8000')  # Default to 
 # Channels configuration
 ASGI_APPLICATION = 'mysite.asgi.application'
 CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer'
+    } if DEBUG else {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [os.environ.get('REDIS_URL', 'redis://localhost:6379')],
+        },
     }
 }
 
