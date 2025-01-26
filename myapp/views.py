@@ -12,6 +12,7 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from openai import OpenAI
 from django.conf import settings
+from .consumers import OrderConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -324,11 +325,8 @@ def vapi_order_webhook(request):
                 customer_name=function_args.get('customer_name', '')
             )
             
-            # Try to find matching menu item with fuzzy matching
-            menu_items = MenuItem.objects.filter(name__icontains='margherita')
-            if not menu_items:
-                menu_items = MenuItem.objects.filter(name__icontains='margarita')
-                
+            # Try to find matching menu item
+            menu_items = MenuItem.objects.filter(name__icontains=query.lower())
             logger.info(f"Found {menu_items.count()} matching menu items")
             
             if menu_items:
@@ -349,6 +347,16 @@ def vapi_order_webhook(request):
                 order.save()
                 
                 logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{order_item.quantity}")
+                
+                # Broadcast order update via WebSocket
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    "orders",
+                    {
+                        "type": "orders_update",
+                        "orders": async_to_sync(OrderConsumer().get_orders)()
+                    }
+                )
                 
                 response_text = (f"I've created order #{order.id} for {item.name}. "
                                f"Total amount: ${order.total_amount}")
