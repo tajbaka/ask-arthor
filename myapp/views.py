@@ -325,12 +325,23 @@ def vapi_order_webhook(request):
             })
             
         tool_call_id = order_tool_call['id']
-        function_args = order_tool_call.get('function', {}).get('arguments', {})
         
+        # Parse function arguments from JSON string
+        function_args_str = order_tool_call.get('function', {}).get('arguments', '{}')
+        try:
+            function_args = json.loads(function_args_str)
+            logger.info(f"Parsed function arguments: {json.dumps(function_args, indent=2)}")
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse function arguments: {function_args_str}")
+            function_args = {}
+            
         # Extract order details from the orders object
         orders = function_args.get('orders', {})
         query = orders.get('name', '').strip()
         quantity = orders.get('quantity', 1)
+        
+        if query:
+            logger.info(f"Found order in arguments - Item: '{query}', Quantity: {quantity}")
         
         # If no query provided, try to infer from conversation
         if not query and messages:
