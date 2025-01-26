@@ -610,35 +610,6 @@ def delete_order(request, order_id: int) -> JsonResponse:
             'message': str(e)
         }, status=500)
 
-def infer_order_removal_from_conversation(messages) -> tuple[str, int]:
-    """Use OpenAI to infer which order to remove from conversation"""
-    try:
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        
-        formatted_messages = [
-            {"role": "system", "content": "You are a helpful assistant that extracts order removal details from conversations. Return ONLY the item name and order ID (if mentioned) in format: 'item_name|order_id'. Example: 'Margherita Pizza|1'. Use empty order_id if not specified: 'Margherita Pizza|'"},
-        ]
-        
-        for msg in messages:
-            role = msg.get('role', '')
-            content = msg.get('content', '')
-            if role and content:
-                formatted_messages.append({"role": role, "content": content})
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=formatted_messages,
-            temperature=0
-        )
-        
-        result = response.choices[0].message.content.strip()
-        item_name, order_id = result.split('|')
-        return item_name.strip(), int(order_id) if order_id.strip() else None
-        
-    except Exception as e:
-        logger.error(f"Error inferring order removal: {str(e)}")
-        return None, None
-
 @csrf_exempt
 @require_http_methods(["POST"])
 def vapi_remove_order_webhook(request):
@@ -680,10 +651,25 @@ def vapi_remove_order_webhook(request):
         
         logger.info(f"Function arguments: {json.dumps(function_args, indent=2)}")
             
-        # Extract order details from the orders object
-        orders = function_args.get('orders', {})
-        query = orders.get('name', '').strip()
-        quantity = orders.get('quantity', 1)
+        # Extract order details from the orders object - handle both list and single object
+        orders_data = function_args.get('orders', [])
+        if isinstance(orders_data, dict):
+            orders_data = [orders_data]
+        
+        # Process first order in the list
+        if not orders_data:
+            logger.warning("No orders specified for removal")
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": "Which item would you like to remove from your order?",
+                    "name": "order"
+                }]
+            })
+            
+        order_to_remove = orders_data[0]
+        query = order_to_remove.get('name', '').strip()
+        quantity = order_to_remove.get('quantity', 1)
         
         if query:
             logger.info(f"Found remove request in arguments - Item: '{query}', Quantity: {quantity}")
