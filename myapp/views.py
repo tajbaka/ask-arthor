@@ -150,7 +150,7 @@ def vapi_menu_webhook(request):
                 
                 # Group by categories if you have them, or just list all items
                 menu_text += "\n".join(
-                    f"• {item.name} (${item.price})\n  {item.description}"
+                    f"• {item.name}"
                     for item in menu_items
                 )
                 
@@ -297,6 +297,60 @@ def infer_order_from_conversation(messages) -> tuple[str, int]:
         logger.error(f"Error inferring order: {str(e)}")
         return None, 1
 
+def parse_tool_call_arguments(tool_call, tool_name):
+    """Parse and validate tool call arguments"""
+    function_args = tool_call.get('function', {}).get('arguments', {})
+    try:
+        # Handle both string and dict formats
+        if isinstance(function_args, str):
+            parsed_args = json.loads(function_args)
+        else:
+            parsed_args = function_args
+            
+        # Get the Order object
+        order_data = parsed_args.get('Order', {})
+        # Extract name and quantity
+        query = order_data.get('name', '').strip()
+        quantity = order_data.get('quantity', 1)
+        
+        logger.info(f"Parsed {tool_name} details - Item: '{query}', Quantity: {quantity}")
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse arguments JSON: {e}")
+        query = ''
+        quantity = 1
+        
+    return query, quantity
+
+def get_tool_call(received_data, tool_name):
+    """Extract specific tool call from received data"""
+    tool_calls = received_data.get('message', {}).get('toolCalls', [])
+    return next(
+        (call for call in tool_calls if call.get('function', {}).get('name') == tool_name),
+        None
+    )
+
+def broadcast_order_update():
+    """Broadcast order updates via WebSocket"""
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        "orders",
+        {
+            "type": "orders_update",
+            "orders": async_to_sync(OrderConsumer().get_orders)()
+        }
+    )
+
+def create_error_response(tool_call_id, message):
+    """Create error response JSON"""
+    return JsonResponse({
+        "results": [{
+            "toolCallId": tool_call_id,
+            "result": message,
+            "name": "order"
+        }]
+    })
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def vapi_order_webhook(request):
@@ -305,82 +359,47 @@ def vapi_order_webhook(request):
         received = json.loads(request.body)
         logger.info(f"Received order: {json.dumps(received, indent=2)}")
         
-        messages = received.get('messagesOpenAIFormatted', [])
-        tool_calls = received.get('message', {}).get('toolCalls', [])
-        
-        # Find the addorder tool call
-        order_tool_call = next(
-            (call for call in tool_calls if call.get('function', {}).get('name') == 'addorder'),
-            None
-        )
+        # Get addorder tool call
+        order_tool_call = get_tool_call(received, 'addorder')
         
         # Validate tool calls
         if not order_tool_call:
             logger.warning("No order tool call found in request")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                    "result": "What would you like to order from our menu?",
-                    "name": "order"
-                }]
-            })
+            return create_error_response(
+                "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+                "What would you like to order from our menu?"
+            )
             
         tool_call_id = order_tool_call['id']
         
-        # Get function arguments
-        function_args = order_tool_call.get('function', {}).get('arguments', {})
-        try:
-            # Handle both string and dict formats
-            if isinstance(function_args, str):
-                parsed_args = json.loads(function_args)
-            else:
-                parsed_args = function_args
-                
-            # Get the Order object
-            order_data = parsed_args.get('Order', {})
-            # Extract name and quantity
-            query = order_data.get('name', '').strip()
-            quantity = order_data.get('quantity', 1)
-            
-            logger.info(f"Parsed order details - Item: '{query}', Quantity: {quantity}")
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse arguments JSON: {e}")
-            query = ''
-            quantity = 1
+        # Parse arguments
+        query, quantity = parse_tool_call_arguments(order_tool_call, 'order')
         
-        # If no query provided or need to find similar items
+        # Validate query
         if not query:
             logger.warning("No order query provided")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": "What would you like to order from our menu?",
-                    "name": "order"
-                }]
-            })
+            return create_error_response(
+                tool_call_id,
+                "What would you like to order from our menu?"
+            )
             
-        # Use similarity search to find matching menu item
+        # Find matching menu item
         similar_items = find_similar_items(query)
-        
         if not similar_items:
             logger.warning(f"No menu items found matching: '{query}'")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": f"I couldn't find '{query}' on our menu. Would you like to see our menu?",
-                    "name": "order"
-                }]
-            })
+            return create_error_response(
+                tool_call_id,
+                f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
+            )
             
         # Use the best match
         item = similar_items[0]
         logger.info(f"Found matching menu item: {item.name}")
         
-        # Create order with validated data
-        order: Order = Order.objects.create(
-            customer_name=function_args.get('customer_name', '').strip(),
-            special_instructions=function_args.get('special_instructions', '').strip()
+        # Create order
+        order = Order.objects.create(
+            customer_name=order_tool_call.get('function', {}).get('arguments', {}).get('customer_name', '').strip(),
+            special_instructions=order_tool_call.get('function', {}).get('arguments', {}).get('special_instructions', '').strip()
         )
         
         # Create order item
@@ -398,16 +417,10 @@ def vapi_order_webhook(request):
         
         logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{quantity}")
         
-        # Broadcast order update via WebSocket
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "orders",
-            {
-                "type": "orders_update",
-                "orders": async_to_sync(OrderConsumer().get_orders)()
-            }
-        )
+        # Broadcast update
+        broadcast_order_update()
         
+        # Prepare response
         response_text = (f"I've created order #{order.id} for {quantity}x {item.name}. "
                         f"Total amount: ${order.total_amount}")
         
@@ -424,13 +437,10 @@ def vapi_order_webhook(request):
             
     except Exception as e:
         logger.error(f"Order webhook error: {str(e)}", exc_info=True)
-        return JsonResponse({
-            "results": [{
-                "toolCallId": tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                "result": "Sorry, I'm having trouble processing your order right now.",
-                "name": "order"
-            }]
-        })
+        return create_error_response(
+            tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+            "Sorry, I'm having trouble processing your order right now."
+        )
 
 @require_http_methods(["GET"])
 def get_orders(request) -> JsonResponse:
@@ -644,15 +654,6 @@ def vapi_remove_order_webhook(request):
         
         if query:
             logger.info(f"Found remove request in arguments - Item: '{query}', Quantity: {quantity}")
-        
-        # # If no query provided, try to infer from conversation
-        # if not query and messages:
-        #     logger.info("No query provided, inferring from conversation...")
-        #     inferred_item, inferred_quantity = infer_order_from_conversation(messages)
-        #     if inferred_item:
-        #         query = inferred_item
-        #         quantity = inferred_quantity
-        #         logger.info(f"Inferred removal: {quantity}x {inferred_item}")
         
         # Validate query
         if not query:
