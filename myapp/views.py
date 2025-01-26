@@ -669,68 +669,109 @@ def vapi_remove_order_webhook(request):
             return JsonResponse({
                 "results": [{
                     "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                    "result": "Which order would you like to remove?",
+                    "result": "Which item would you like to remove from your order?",
                     "name": "order"
                 }]
             })
             
         tool_call_id = remove_tool_call['id']
+        
+        # Get function arguments
         function_args = remove_tool_call.get('function', {}).get('arguments', {})
-        query = function_args.get('query', '').strip()
-        order_id = function_args.get('order_id')
+        if isinstance(function_args, str):
+            try:
+                function_args = json.loads(function_args)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse function arguments string: {function_args}")
+                function_args = {}
+        
+        logger.info(f"Function arguments: {json.dumps(function_args, indent=2)}")
+            
+        # Extract order details from the orders object
+        orders = function_args.get('orders', {})
+        query = orders.get('name', '').strip()
+        quantity = orders.get('quantity', 1)
+        
+        if query:
+            logger.info(f"Found remove request in arguments - Item: '{query}', Quantity: {quantity}")
         
         # If no query provided, try to infer from conversation
-        if not (query or order_id) and messages:
-            logger.info("No query/order_id provided, inferring from conversation...")
-            inferred_item, inferred_order_id = infer_order_removal_from_conversation(messages)
+        if not query and messages:
+            logger.info("No query provided, inferring from conversation...")
+            inferred_item, inferred_quantity = infer_order_from_conversation(messages)
             if inferred_item:
                 query = inferred_item
-            if inferred_order_id:
-                order_id = inferred_order_id
-            logger.info(f"Inferred removal: item='{inferred_item}', order_id={inferred_order_id}")
+                quantity = inferred_quantity
+                logger.info(f"Inferred removal: {quantity}x {inferred_item}")
         
-        # Try to find the order to remove
-        if order_id:
-            try:
-                order = Order.objects.get(id=order_id)
-                order.delete()
-                logger.info(f"Removed order #{order_id}")
-                response_text = f"I've removed order #{order_id} from your orders."
-            except Order.DoesNotExist:
-                logger.warning(f"Order #{order_id} not found")
-                response_text = f"I couldn't find order #{order_id}. Would you like to see your current orders?"
-        elif query:
-            # Try to find orders with matching items
-            matching_orders = Order.objects.filter(items__item_name__icontains=query.lower())
-            if matching_orders:
-                if matching_orders.count() == 1:
-                    order = matching_orders[0]
-                    order_id = order.id
-                    order.delete()
-                    logger.info(f"Removed order #{order_id} containing '{query}'")
-                    response_text = f"I've removed order #{order_id} containing {query}."
-                else:
-                    # Multiple matches found
-                    order_list = ", ".join([f"#{o.id}" for o in matching_orders])
-                    logger.info(f"Multiple orders found containing '{query}': {order_list}")
-                    response_text = f"I found multiple orders with {query}: {order_list}. Which order would you like to remove?"
-            else:
-                logger.warning(f"No orders found containing '{query}'")
-                response_text = f"I couldn't find any orders containing '{query}'. Would you like to see your current orders?"
+        # Validate query
+        if not query:
+            logger.warning("No item specified for removal")
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": "Which item would you like to remove from your order?",
+                    "name": "order"
+                }]
+            })
+        
+        # Get current order
+        current_order = Order.objects.first()  # Assuming we maintain one order at a time
+        if not current_order:
+            logger.warning("No current order found")
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": "There are no active orders to remove items from.",
+                    "name": "order"
+                }]
+            })
+        
+        # Find matching items in the order
+        matching_items = current_order.items.filter(item_name__icontains=query.lower())
+        
+        if not matching_items:
+            logger.warning(f"No items found matching: '{query}'")
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": f"I couldn't find '{query}' in your current order. Would you like to see your order?",
+                    "name": "order"
+                }]
+            })
+        
+        # Remove the first matching item
+        item = matching_items[0]
+        item_name = item.item_name
+        item_price = item.item_price
+        item.delete()
+        
+        # Update order total
+        current_order.total_amount = sum(
+            item.item_price * item.quantity 
+            for item in current_order.items.all()
+        )
+        current_order.save()
+        
+        # If order is empty, delete it
+        if current_order.items.count() == 0:
+            current_order.delete()
+            response_text = f"I've removed {item_name} from your order. Your order is now empty."
         else:
-            logger.warning("No order identification provided")
-            response_text = "I'm not sure which order you'd like to remove. Could you specify the order number or item?"
+            response_text = (f"I've removed {item_name} from your order. "
+                           f"New total: ${current_order.total_amount}")
         
-        # If we removed an order, broadcast the update
-        if order_id:
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "orders",
-                {
-                    "type": "orders_update",
-                    "orders": async_to_sync(OrderConsumer().get_orders)()
-                }
-            )
+        logger.info(f"Removed item: {item_name}")
+        
+        # Broadcast order update via WebSocket
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "orders",
+            {
+                "type": "orders_update",
+                "orders": async_to_sync(OrderConsumer().get_orders)()
+            }
+        )
         
         return JsonResponse({
             "results": [{
@@ -745,7 +786,7 @@ def vapi_remove_order_webhook(request):
         return JsonResponse({
             "results": [{
                 "toolCallId": tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                "result": "Sorry, I'm having trouble removing the order right now.",
+                "result": "Sorry, I'm having trouble removing items from your order right now.",
                 "name": "order"
             }]
         })
