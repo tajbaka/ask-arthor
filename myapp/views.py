@@ -127,8 +127,9 @@ def vapi_webhook(request):
         received = json.loads(request.body)
         logger.info(f"Received: {json.dumps(received)}")
         
-        # Hardcode the tool ID
-        tool_call_id = "0dca5b3f-59c3-4236-9784-84e560fb26ef"
+        # Extract tool call ID from the received data
+        tool_calls = received.get('message', {}).get('toolCalls', [])
+        tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
         try:
             # Get all menu items
@@ -152,7 +153,8 @@ def vapi_webhook(request):
             response = {
                 "results": [{
                     "toolCallId": tool_call_id,
-                    "result": response_text
+                    "result": response_text,
+                    "name": "menu"
                 }]
             }
             logger.info(f"Response: {json.dumps(response)}")
@@ -164,7 +166,8 @@ def vapi_webhook(request):
             response = {
                 "results": [{
                     "toolCallId": tool_call_id,
-                    "result": response_text
+                    "result": response_text,
+                    "name": "menu"
                 }]
             }
             logger.info(f"Error Response: {json.dumps(response)}")
@@ -175,7 +178,8 @@ def vapi_webhook(request):
         response = {
             "results": [{
                 "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                "result": "Sorry, I'm having trouble accessing the menu right now."
+                "result": "Sorry, I'm having trouble accessing the menu right now.",
+                "name": "menu"
             }]
         }
         logger.info(f"Error Response: {json.dumps(response)}")
