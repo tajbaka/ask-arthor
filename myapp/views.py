@@ -256,3 +256,43 @@ def replace_menu(request) -> JsonResponse:
             'status': 'error',
             'message': str(e)
         }, status=400)
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def vapi_order_webhook(request):
+    """Handle VAPI order webhook requests - Logs the order details"""
+    try:
+        # Log received request
+        received = json.loads(request.body)
+        logger.info(f"Received order: {json.dumps(received, indent=2)}")
+        
+        # Extract tool call ID from the received data
+        tool_calls = received.get('message', {}).get('toolCalls', [])
+        tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
+        
+        # For now, just acknowledge the order
+        response_text = "Thank you for your order! I've received the following details:\n\n"
+        response_text += json.dumps(received, indent=2)
+        
+        response = {
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": response_text,
+                "name": "order"
+            }]
+        }
+        
+        logger.info(f"Order Response: {json.dumps(response)}")
+        return JsonResponse(response)
+            
+    except Exception as e:
+        logger.error(f"Order webhook error: {str(e)}")
+        response = {
+            "results": [{
+                "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+                "result": "Sorry, I'm having trouble processing your order right now.",
+                "name": "order"
+            }]
+        }
+        logger.info(f"Error Response: {json.dumps(response)}")
+        return JsonResponse(response)
