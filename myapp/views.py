@@ -14,7 +14,6 @@ from asgiref.sync import async_to_sync
 from openai import OpenAI
 from django.conf import settings
 from .consumers import OrderConsumer
-from django.views.decorators.cors import cors_exempt
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +109,7 @@ def update_menu(request) -> JsonResponse:
             'message': str(e)
         }, status=400)
 
-@cors_exempt
+@csrf_exempt
 @require_http_methods(["GET"])
 def get_menu(request) -> JsonResponse:
     """Get all menu items"""

@@ -134,7 +134,7 @@ CHANNEL_LAYERS = {
 }
 
 # CORS settings
-CORS_ALLOW_ALL_ORIGINS = True  # Temporarily set to True for debugging
+CORS_ALLOW_ALL_ORIGINS = True  # For development
 
 CORS_ALLOWED_ORIGINS = [
     "https://stellar-gingersnap-137a05.netlify.app",
@@ -162,5 +162,4 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 ]
 
 CORS_URLS_REGEX = r'^.*$'
-CORS_REPLACE_HTTPS_REFERER = True
 CORS_ORIGIN_ALLOW_ALL = True  # Most permissive setting for debugging
