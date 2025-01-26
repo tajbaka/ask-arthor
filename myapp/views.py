@@ -587,15 +587,18 @@ def vapi_remove_order_webhook(request):
     """Handle VAPI remove order webhook requests"""
     try:
         received = json.loads(request.body)
+        logger.info(f"Received remove order webhook request: {json.dumps(received, indent=2)}")
         
         remove_tool_call = get_tool_call(received, 'removeorder')
         if not remove_tool_call:
+            logger.warning("No removeorder tool call found in request")
             return create_error_response(
                 "0dca5b3f-59c3-4236-9784-84e560fb26ef",
                 "Which order would you like to remove?"
             )
             
         tool_call_id = remove_tool_call['id']
+        logger.info(f"Processing remove order tool call: {tool_call_id}")
         
         # Get the order ID from arguments
         function_args = remove_tool_call.get('function', {}).get('arguments', {})
@@ -604,8 +607,10 @@ def vapi_remove_order_webhook(request):
         
         order_data = function_args.get('Order', {})
         order_id = order_data.get('id')
+        logger.info(f"Attempting to remove order #{order_id}")
         
         if not order_id:
+            logger.warning("No order ID provided in request")
             return create_error_response(
                 tool_call_id,
                 "Which order would you like to remove?"
@@ -614,7 +619,9 @@ def vapi_remove_order_webhook(request):
         try:
             order = Order.objects.get(id=order_id)
             item_name = order.item_name
+            logger.info(f"Found order #{order_id}: {item_name} x{order.quantity}")
             order.delete()
+            logger.info(f"Successfully deleted order #{order_id}")
             
             broadcast_order_update()
             
@@ -628,6 +635,7 @@ def vapi_remove_order_webhook(request):
             })
             
         except Order.DoesNotExist:
+            logger.warning(f"Order #{order_id} not found")
             return create_error_response(
                 tool_call_id,
                 f"I couldn't find order #{order_id}. Would you like to see your current orders?"
