@@ -23,7 +23,11 @@ SECRET_KEY = os.getenv('SECRET_KEY', '0gza9xs+2133ghyx7vhatayhrec@hc=(=*#cjx30+1
 
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['*']  # We'll update this after getting our Railway domain
+ALLOWED_HOSTS = [
+    '*',
+    'ask-arthor-production.up.railway.app',
+    'stellar-gingersnap-137a05.netlify.app',
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -129,42 +133,34 @@ CHANNEL_LAYERS = {
     }
 }
 
-# Update CORS settings
-CORS_ALLOW_ALL_ORIGINS = False  # Set to False in production
+# CORS settings
+CORS_ALLOW_ALL_ORIGINS = True  # Temporarily set to True for debugging
 
 CORS_ALLOWED_ORIGINS = [
-    "https://stellar-gingersnap-137a05.netlify.app",  # Your frontend domain
-    "http://localhost:3000",  # For local development
+    "https://stellar-gingersnap-137a05.netlify.app",
+    "http://localhost:3000",
+    "https://ask-arthor-production.up.railway.app",
 ]
 
-# Allow credentials
+# Add CORS_ORIGIN_WHITELIST as a fallback
+CORS_ORIGIN_WHITELIST = [
+    "https://stellar-gingersnap-137a05.netlify.app",
+    "http://localhost:3000",
+    "https://ask-arthor-production.up.railway.app",
+]
+
+# Allow all headers and methods temporarily for debugging
+CORS_ALLOW_ALL_METHODS = True
+CORS_ALLOW_HEADERS = ['*']
+CORS_EXPOSE_HEADERS = ['*']
 CORS_ALLOW_CREDENTIALS = True
-
-# Allow specific HTTP methods
-CORS_ALLOW_METHODS = [
-    'DELETE',
-    'GET',
-    'OPTIONS',
-    'PATCH',
-    'POST',
-    'PUT',
-]
-
-# Allow specific headers
-CORS_ALLOW_HEADERS = [
-    'accept',
-    'accept-encoding',
-    'authorization',
-    'content-type',
-    'dnt',
-    'origin',
-    'user-agent',
-    'x-csrftoken',
-    'x-requested-with',
-]
 
 # Allow WebSocket connections
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://\w+\.up\.railway\.app$",
     r"^http://localhost:\d+$",
 ]
+
+CORS_URLS_REGEX = r'^.*$'
+CORS_REPLACE_HTTPS_REFERER = True
+CORS_ORIGIN_ALLOW_ALL = True  # Most permissive setting for debugging
