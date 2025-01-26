@@ -7,7 +7,6 @@ from .models import MenuItem
 import numpy as np
 import logging
 from typing import List
-from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +60,11 @@ def find_similar_items(query: str, threshold: float = 0.7) -> List[MenuItem]:
         similar_items = []
         for item in items:
             item_embedding = item.get_embedding()
-            if item_embedding:
-                similarity = cosine_similarity(query_embedding, item_embedding)
+            if item_embedding is not None:
+                # Use numpy dot product for cosine similarity
+                similarity = np.dot(query_embedding, item_embedding) / (
+                    np.linalg.norm(query_embedding) * np.linalg.norm(item_embedding)
+                )
                 if similarity >= threshold:
                     similar_items.append((item, similarity))
         
