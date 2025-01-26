@@ -326,7 +326,11 @@ def vapi_order_webhook(request):
             
         tool_call_id = order_tool_call['id']
         function_args = order_tool_call.get('function', {}).get('arguments', {})
-        query = function_args.get('query', '').strip()
+        
+        # Extract order details from the orders object
+        orders = function_args.get('orders', {})
+        query = orders.get('name', '').strip()
+        quantity = orders.get('quantity', 1)
         
         # If no query provided, try to infer from conversation
         if not query and messages:
@@ -334,8 +338,8 @@ def vapi_order_webhook(request):
             inferred_item, inferred_quantity = infer_order_from_conversation(messages)
             if inferred_item:
                 query = inferred_item
-                function_args['quantity'] = inferred_quantity
-                logger.info(f"Inferred order: {inferred_quantity}x {inferred_item}")
+                quantity = inferred_quantity
+                logger.info(f"Inferred order: {quantity}x {inferred_item}")
         
         # Validate query
         if not query:
@@ -378,7 +382,7 @@ def vapi_order_webhook(request):
         
         # Validate quantity
         try:
-            quantity = max(1, int(function_args.get('quantity', 1)))
+            quantity = max(1, int(quantity))
         except (ValueError, TypeError):
             quantity = 1
             logger.warning("Invalid quantity provided, defaulting to 1")
