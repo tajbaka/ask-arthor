@@ -2,7 +2,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 import json
-from .models import MenuItem
+from .models import MenuItem, Order, OrderItem
 from .utils import get_embedding, find_similar_items
 from typing import Dict, List, Any
 from django.core.exceptions import ImproperlyConfigured
@@ -259,23 +259,42 @@ def replace_menu(request) -> JsonResponse:
 @csrf_exempt
 @require_http_methods(["POST"])
 def vapi_order_webhook(request):
-    """Handle VAPI order webhook requests - Logs the order details"""
+    """Handle VAPI order webhook requests"""
     try:
-        # Log received request
         received = json.loads(request.body)
         logger.info(f"Received order: {json.dumps(received, indent=2)}")
         
-        # Extract tool call ID and arguments
         tool_calls = received.get('message', {}).get('toolCalls', [])
         tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
-        # Get function arguments
         function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
         query = function_args.get('query', '')
         
         if query:
-            response_text = (f"I see you're interested in ordering '{query}'. "
-                           f"Is this correct?")
+            # Create a new order
+            order = Order.objects.create(
+                customer_name=function_args.get('customer_name', ''),
+                special_instructions=function_args.get('special_instructions', '')
+            )
+            
+            # Try to find matching menu item
+            menu_items = MenuItem.objects.filter(name__icontains=query)
+            if menu_items:
+                item = menu_items[0]
+                OrderItem.objects.create(
+                    order=order,
+                    menu_item=item,
+                    quantity=function_args.get('quantity', 1),
+                    item_name=item.name,
+                    item_price=item.price
+                )
+                order.total_amount = item.price * function_args.get('quantity', 1)
+                order.save()
+                
+                response_text = (f"I've created order #{order.id} for {query}. "
+                               f"Total amount: ${order.total_amount}")
+            else:
+                response_text = f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
         else:
             response_text = ("I don't see any specific order details. "
                            "What would you like to order? You can tell me the name of the item.")
@@ -300,3 +319,40 @@ def vapi_order_webhook(request):
             }]
         }
         return JsonResponse(response)
+
+@require_http_methods(["GET"])
+def get_orders(request) -> JsonResponse:
+    """Get all orders with their items"""
+    try:
+        orders = Order.objects.all().order_by('-created_at')  # Most recent first
+        orders_list = []
+        
+        for order in orders:
+            order_items = [{
+                'item_name': item.item_name,
+                'quantity': item.quantity,
+                'price': str(item.item_price),
+                'special_instructions': item.special_instructions
+            } for item in order.items.all()]
+            
+            orders_list.append({
+                'id': order.id,
+                'status': order.status,
+                'customer_name': order.customer_name,
+                'created_at': order.created_at.isoformat(),
+                'total_amount': str(order.total_amount),
+                'special_instructions': order.special_instructions,
+                'items': order_items
+            })
+        
+        return JsonResponse({
+            'status': 'success',
+            'orders': orders_list
+        })
+    
+    except Exception as e:
+        logger.error(f"Get orders error: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)

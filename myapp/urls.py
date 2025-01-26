@@ -12,4 +12,5 @@ urlpatterns = [
     path('vapi/order/', views.vapi_order_webhook, name='vapi_order_webhook'),
     path('menu/<int:item_id>/', views.delete_menu_item, name='delete_menu_item'),
     path('menu/replace/', views.replace_menu, name='replace_menu'),
+    path('orders/', views.get_orders, name='get_orders'),
 ]
