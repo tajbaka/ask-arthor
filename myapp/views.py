@@ -126,7 +126,6 @@ def vapi_webhook(request):
     try:
         # Log received request
         received = json.loads(request.body)
-        logger.info(f"Received: {json.dumps(received)}")
         
         # Extract tool call ID from the received data
         tool_calls = received.get('message', {}).get('toolCalls', [])
