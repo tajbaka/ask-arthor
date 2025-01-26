@@ -641,34 +641,11 @@ def vapi_remove_order_webhook(request):
         
         # Get function arguments
         function_args = remove_tool_call.get('function', {}).get('arguments', {})
-        if isinstance(function_args, str):
-            try:
-                function_args = json.loads(function_args)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse function arguments string: {function_args}")
-                function_args = {}
-        
         logger.info(f"Function arguments: {json.dumps(function_args, indent=2)}")
             
-        # Extract order details from the orders object - handle both list and single object
-        orders_data = function_args.get('orders', [])
-        if isinstance(orders_data, dict):
-            orders_data = [orders_data]
-        
-        # Process first order in the list
-        if not orders_data:
-            logger.warning("No orders specified for removal")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": "Which item would you like to remove from your order?",
-                    "name": "order"
-                }]
-            })
-            
-        order_to_remove = orders_data[0]
-        query = order_to_remove.get('name', '').strip()
-        quantity = order_to_remove.get('quantity', 1)
+        # Extract order details - now using "Order" field directly
+        query = function_args.get('Order', '').strip()
+        quantity = 1  # Default quantity since it's not specified in new format
         
         if query:
             logger.info(f"Found remove request in arguments - Item: '{query}', Quantity: {quantity}")
