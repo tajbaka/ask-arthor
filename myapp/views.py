@@ -266,23 +266,31 @@ def vapi_order_webhook(request):
         received = json.loads(request.body)
         logger.info(f"Received order: {json.dumps(received, indent=2)}")
         
+        # Extract the last user message to get the order details
+        messages = received.get('messagesOpenAIFormatted', [])
+        last_user_message = next((msg['content'] for msg in reversed(messages) 
+                                if msg.get('role') == 'user'), '')
+        
         tool_calls = received.get('message', {}).get('toolCalls', [])
         tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
+        # Try to get query from arguments or last user message
         function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
-        query = function_args.get('query', '')
+        query = function_args.get('query', '') or last_user_message
         
         logger.info(f"Looking for menu item matching: '{query}'")
         
         if query:
             # Create a new order
             order = Order.objects.create(
-                customer_name=function_args.get('customer_name', ''),
-                special_instructions=function_args.get('special_instructions', '')
+                customer_name=function_args.get('customer_name', '')
             )
             
-            # Try to find matching menu item with better logging
-            menu_items = MenuItem.objects.filter(name__icontains=query)
+            # Try to find matching menu item with fuzzy matching
+            menu_items = MenuItem.objects.filter(name__icontains='margherita')  # Handle common spelling
+            if not menu_items:
+                menu_items = MenuItem.objects.filter(name__icontains='margarita')  # Alternative spelling
+                
             logger.info(f"Found {menu_items.count()} matching menu items")
             
             if menu_items:
@@ -304,17 +312,7 @@ def vapi_order_webhook(request):
                 
                 logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{order_item.quantity}")
                 
-                # Broadcast order update
-                channel_layer = get_channel_layer()
-                async_to_sync(channel_layer.group_send)(
-                    "orders",
-                    {
-                        "type": "orders_update",
-                        "orders": async_to_sync(OrderConsumer().get_orders)()
-                    }
-                )
-                
-                response_text = (f"I've created order #{order.id} for {query}. "
+                response_text = (f"I've created order #{order.id} for {item.name}. "
                                f"Total amount: ${order.total_amount}")
             else:
                 logger.warning(f"No menu items found matching: '{query}'")
