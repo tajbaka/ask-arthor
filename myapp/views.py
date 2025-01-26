@@ -324,11 +324,20 @@ def parse_tool_call_arguments(tool_call, tool_name):
 
 def get_tool_call(received_data, tool_name):
     """Extract specific tool call from received data"""
+    # Check in toolCalls array first
     tool_calls = received_data.get('message', {}).get('toolCalls', [])
-    return next(
+    tool_call = next(
         (call for call in tool_calls if call.get('function', {}).get('name') == tool_name),
         None
     )
+    
+    # If not found, check in single toolCall object
+    if not tool_call:
+        tool_call = received_data.get('toolCall')
+        if tool_call and tool_call.get('function', {}).get('name') != tool_name:
+            tool_call = None
+            
+    return tool_call
 
 def broadcast_order_update():
     """Broadcast order updates via WebSocket"""
@@ -615,110 +624,63 @@ def vapi_remove_order_webhook(request):
         received = json.loads(request.body)
         logger.info(f"Received remove order request: {json.dumps(received, indent=2)}")
         
-        messages = received.get('messagesOpenAIFormatted', [])
-        tool_calls = received.get('message', {}).get('toolCalls', [])
-        
-        # Find the removeorder tool call
-        remove_tool_call = next(
-            (call for call in tool_calls if call.get('function', {}).get('name') == 'removeorder'),
-            None
-        )
+        # Get removeorder tool call using helper function
+        remove_tool_call = get_tool_call(received, 'removeorder')
         
         # Validate tool calls
         if not remove_tool_call:
             logger.warning("No remove order tool call found in request")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                    "result": "Which item would you like to remove from your order?",
-                    "name": "order"
-                }]
-            })
+            return create_error_response(
+                "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+                "Which item would you like to remove from your order?"
+            )
             
         tool_call_id = remove_tool_call['id']
         
-        # Get function arguments
-        function_args = remove_tool_call.get('function', {}).get('arguments', {})
-        if isinstance(function_args, str):
-            try:
-                function_args = json.loads(function_args)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse function arguments string: {function_args}")
-                function_args = {}
-
-        logger.info(f"Function arguments: {json.dumps(function_args, indent=2)}")
-            
-        # Extract order details - now using "Order" field directly
-        query = function_args.get('Order', '').strip()
-        quantity = 1  # Default quantity since it's not specified in new format
-        
-        if query:
-            logger.info(f"Found remove request in arguments - Item: '{query}', Quantity: {quantity}")
+        # Parse arguments using helper function
+        query, quantity = parse_tool_call_arguments(remove_tool_call, 'remove')
         
         # Validate query
         if not query:
             logger.warning("No item specified for removal")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": "Which item would you like to remove from your order?",
-                    "name": "order"
-                }]
-            })
+            return create_error_response(
+                tool_call_id,
+                "Which item would you like to remove from your order?"
+            )
         
         # Get current order and log its items
         current_order = Order.objects.first()
         if not current_order:
             logger.warning("No current order found")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": "There are no active orders to remove items from.",
-                    "name": "order"
-                }]
-            })
+            return create_error_response(
+                tool_call_id,
+                "There are no active orders to remove items from."
+            )
             
         logger.info("Current order items:")
         for item in current_order.items.all():
             logger.info(f"- {item.item_name} (id: {item.id})")
         
-        # Find matching items in the order - make case insensitive
-        query = query.lower()  # Convert query to lowercase
-        logger.info(f"Looking for items matching: '{query}'")
+        # Find matching items in the order using similarity search
+        similar_items = find_similar_items(query)
+        matching_items = current_order.items.filter(item_name__in=[item.name for item in similar_items])
         
-        # Try exact match first
-        matching_items = current_order.items.filter(item_name__iexact=query)
-        logger.info(f"Found {matching_items.count()} exact matches")
-        
-        # Try partial match if no exact matches
-        if not matching_items:
-            matching_items = current_order.items.filter(item_name__icontains=query)
-            logger.info(f"Found {matching_items.count()} partial matches")
-            
         if not matching_items:
             logger.warning(f"No items found matching: '{query}'")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": f"I couldn't find '{query}' in your current order. Would you like to see your order?",
-                    "name": "order"
-                }]
-            })
+            return create_error_response(
+                tool_call_id,
+                f"I couldn't find '{query}' in your current order. Would you like to see your order?"
+            )
             
         # Remove the first matching item
         item = matching_items[0]
         item_name = item.item_name
-        logger.info(f"Removing item: {item_name} (id: {item.id})")
+        menu_item_id = str(item.menu_item.id) if item.menu_item else None
+        logger.info(f"Removing item: {item_name} (menu_item_id: {menu_item_id})")
         
         # Delete the item
         item.delete()
         logger.info("Item deleted from database")
-        
-        # Verify deletion
-        if not OrderItem.objects.filter(id=item.id).exists():
-            logger.info("Verified item was deleted")
-        else:
-            logger.error("Item still exists after deletion!")
         
         # Update order total
         current_order.total_amount = sum(
@@ -726,17 +688,9 @@ def vapi_remove_order_webhook(request):
             for item in current_order.items.all()
         )
         current_order.save()
-        logger.info(f"Updated order total: ${current_order.total_amount}")
         
-        # Broadcast order update via WebSocket
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "orders",
-            {
-                "type": "orders_update",
-                "orders": async_to_sync(OrderConsumer().get_orders)()
-            }
-        )
+        # Broadcast update
+        broadcast_order_update()
         
         response_text = (f"I've removed {item_name} from your order. "
                        f"New total: ${current_order.total_amount}")
@@ -745,16 +699,16 @@ def vapi_remove_order_webhook(request):
             "results": [{
                 "toolCallId": tool_call_id,
                 "result": response_text,
-                "name": "order"
+                "name": "order",
+                "order_id": str(current_order.id),
+                "menu_item_id": menu_item_id,
+                "quantity": quantity
             }]
         })
             
     except Exception as e:
         logger.error(f"Remove order webhook error: {str(e)}", exc_info=True)
-        return JsonResponse({
-            "results": [{
-                "toolCallId": tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
-                "result": "Sorry, I'm having trouble removing items from your order right now.",
-                "name": "order"
-            }]
-        })
+        return create_error_response(
+            tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+            "Sorry, I'm having trouble removing items from your order right now."
+        )
