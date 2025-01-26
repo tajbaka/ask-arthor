@@ -34,12 +34,14 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'myapp',
     'channels',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.common.CommonMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -121,3 +123,16 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer"
     }
 }
+
+# Add CORS settings
+CORS_ALLOW_ALL_ORIGINS = True  # For development only
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://your-frontend-domain.com",
+]
+
+# Allow WebSocket connections
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://\w+\.up\.railway\.app$",
+    r"^http://localhost:\d+$",
+]

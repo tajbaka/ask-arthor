@@ -6,10 +6,13 @@ import json
 class OrderConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         """When client connects"""
-        await self.channel_layer.group_add("orders", self.channel_name)
+        # Accept all connections for now
         await self.accept()
         
-        # Send current orders on connect
+        # Add to orders group
+        await self.channel_layer.group_add("orders", self.channel_name)
+        
+        # Send current orders
         orders = await self.get_orders()
         await self.send_json({
             'type': 'orders_list',
