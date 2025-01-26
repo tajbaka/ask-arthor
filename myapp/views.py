@@ -677,73 +677,75 @@ def vapi_remove_order_webhook(request):
                 }]
             })
         
-        # Get current order
-        current_order = Order.objects.first()  # Assuming we maintain one order at a time
-        if not current_order:
-            logger.warning("No current order found")
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": "There are no active orders to remove items from.",
-                    "name": "order"
-                }]
-            })
+        # Get current order and log its items
+        current_order = Order.objects.first()
+        if current_order:
+            logger.info("Current order items:")
+            for item in current_order.items.all():
+                logger.info(f"- {item.item_name} (id: {item.id})")
         
         # Find matching items in the order - make case insensitive
         query = query.lower()  # Convert query to lowercase
-        matching_items = current_order.items.filter(item_name__iexact=query)  # Exact match but case insensitive
+        logger.info(f"Looking for items matching: '{query}'")
         
+        # Try exact match first
+        matching_items = current_order.items.filter(item_name__iexact=query)
+        logger.info(f"Found {matching_items.count()} exact matches")
+        
+        # Try partial match if no exact matches
         if not matching_items:
-            # Try partial match if exact match fails
             matching_items = current_order.items.filter(item_name__icontains=query)
-        
-        if not matching_items:
-            logger.warning(f"No items found matching: '{query}'")
+            logger.info(f"Found {matching_items.count()} partial matches")
+            
+        if matching_items:
+            # Log all matches
+            logger.info("Matching items found:")
+            for item in matching_items:
+                logger.info(f"- {item.item_name} (id: {item.id})")
+            
+            # Remove the first matching item
+            item = matching_items[0]
+            item_name = item.item_name
+            logger.info(f"Removing item: {item_name} (id: {item.id})")
+            
+            # Delete the item
+            item.delete()
+            logger.info("Item deleted from database")
+            
+            # Verify deletion
+            if not OrderItem.objects.filter(id=item.id).exists():
+                logger.info("Verified item was deleted")
+            else:
+                logger.error("Item still exists after deletion!")
+            
+            # Update order total
+            current_order.total_amount = sum(
+                item.item_price * item.quantity 
+                for item in current_order.items.all()
+            )
+            current_order.save()
+            logger.info(f"Updated order total: ${current_order.total_amount}")
+            
+            # Broadcast order update via WebSocket
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "orders",
+                {
+                    "type": "orders_update",
+                    "orders": async_to_sync(OrderConsumer().get_orders)()
+                }
+            )
+            
+            response_text = (f"I've removed {item_name} from your order. "
+                           f"New total: ${current_order.total_amount}")
+            
             return JsonResponse({
                 "results": [{
                     "toolCallId": tool_call_id,
-                    "result": f"I couldn't find '{query}' in your current order. Would you like to see your order?",
+                    "result": response_text,
                     "name": "order"
                 }]
             })
-        
-        # Remove the first matching item
-        item = matching_items[0]
-        item_name = item.item_name
-        logger.info(f"Found matching item: {item_name}")
-        
-        # Delete the item
-        item.delete()
-        logger.info(f"Deleted item from database")
-        
-        # Update order total
-        current_order.total_amount = sum(
-            item.item_price * item.quantity 
-            for item in current_order.items.all()
-        )
-        current_order.save()
-        logger.info(f"Updated order total: ${current_order.total_amount}")
-        
-        # Broadcast order update via WebSocket
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            "orders",
-            {
-                "type": "orders_update",
-                "orders": async_to_sync(OrderConsumer().get_orders)()
-            }
-        )
-        
-        response_text = (f"I've removed {item_name} from your order. "
-                       f"New total: ${current_order.total_amount}")
-        
-        return JsonResponse({
-            "results": [{
-                "toolCallId": tool_call_id,
-                "result": response_text,
-                "name": "order"
-            }]
-        })
             
     except Exception as e:
         logger.error(f"Remove order webhook error: {str(e)}", exc_info=True)
