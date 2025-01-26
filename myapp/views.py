@@ -349,41 +349,21 @@ def vapi_order_webhook(request):
             query = ''
             quantity = 1
         
-        # If no query provided, try to infer from conversation
-        if not query and messages:
-            logger.info("No query provided, inferring from conversation...")
-            inferred_item, inferred_quantity = infer_order_from_conversation(messages)
-            if inferred_item:
-                query = inferred_item
-                quantity = inferred_quantity
-                logger.info(f"Inferred order: {quantity}x {inferred_item}")
-        
-        # Validate query
+        # If no query provided or need to find similar items
         if not query:
-            logger.warning("No order details found")
+            logger.warning("No order query provided")
             return JsonResponse({
                 "results": [{
                     "toolCallId": tool_call_id,
-                    "result": "I don't see any specific order details. What would you like to order?",
+                    "result": "What would you like to order from our menu?",
                     "name": "order"
                 }]
             })
+            
+        # Use similarity search to find matching menu item
+        similar_items = find_similar_items(query)
         
-        logger.info(f"Looking for menu item matching: '{query}'")
-        
-        # Try to find matching menu item using both text and vector search
-        text_matches = MenuItem.objects.filter(name__icontains=query.lower())
-        vector_matches = find_similar_items(query)  # Using existing embedding search
-        
-        logger.info(f"Found {text_matches.count()} text matches and {len(vector_matches)} vector matches")
-        
-        # Combine and deduplicate matches
-        menu_items = list(text_matches)
-        for item in vector_matches:
-            if item not in menu_items:
-                menu_items.append(item)
-        
-        if not menu_items:
+        if not similar_items:
             logger.warning(f"No menu items found matching: '{query}'")
             return JsonResponse({
                 "results": [{
@@ -393,16 +373,9 @@ def vapi_order_webhook(request):
                 }]
             })
             
-        # Use the first match (could be from either search method)
-        item = menu_items[0]
-        logger.info(f"Selected menu item: {item.name} (matched via {'text' if item in text_matches else 'vector'} search)")
-        
-        # Validate quantity
-        try:
-            quantity = max(1, int(quantity))
-        except (ValueError, TypeError):
-            quantity = 1
-            logger.warning("Invalid quantity provided, defaulting to 1")
+        # Use the best match
+        item = similar_items[0]
+        logger.info(f"Found matching menu item: {item.name}")
         
         # Create order with validated data
         order: Order = Order.objects.create(
@@ -672,14 +645,14 @@ def vapi_remove_order_webhook(request):
         if query:
             logger.info(f"Found remove request in arguments - Item: '{query}', Quantity: {quantity}")
         
-        # If no query provided, try to infer from conversation
-        if not query and messages:
-            logger.info("No query provided, inferring from conversation...")
-            inferred_item, inferred_quantity = infer_order_from_conversation(messages)
-            if inferred_item:
-                query = inferred_item
-                quantity = inferred_quantity
-                logger.info(f"Inferred removal: {quantity}x {inferred_item}")
+        # # If no query provided, try to infer from conversation
+        # if not query and messages:
+        #     logger.info("No query provided, inferring from conversation...")
+        #     inferred_item, inferred_quantity = infer_order_from_conversation(messages)
+        #     if inferred_item:
+        #         query = inferred_item
+        #         quantity = inferred_quantity
+        #         logger.info(f"Inferred removal: {quantity}x {inferred_item}")
         
         # Validate query
         if not query:
