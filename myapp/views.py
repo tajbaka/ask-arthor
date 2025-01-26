@@ -330,9 +330,17 @@ def vapi_order_webhook(request):
                 }]
             })
         
-        # Try to find matching menu item
-        menu_items = MenuItem.objects.filter(name__icontains=query.lower())
-        logger.info(f"Found {menu_items.count()} matching menu items")
+        # Try to find matching menu item using both text and vector search
+        text_matches = MenuItem.objects.filter(name__icontains=query.lower())
+        vector_matches = find_similar_items(query)  # Using existing embedding search
+        
+        logger.info(f"Found {text_matches.count()} text matches and {len(vector_matches)} vector matches")
+        
+        # Combine and deduplicate matches
+        menu_items = list(text_matches)
+        for item in vector_matches:
+            if item not in menu_items:
+                menu_items.append(item)
         
         if not menu_items:
             logger.warning(f"No menu items found matching: '{query}'")
@@ -345,8 +353,10 @@ def vapi_order_webhook(request):
                 }]
             })
             
-        # Create order only if we have a valid menu item
+        # Use the first match (could be from either search method)
         item = menu_items[0]
+        logger.info(f"Selected menu item: {item.name} (matched via {'text' if item in text_matches else 'vector'} search)")
+        
         quantity = max(1, int(function_args.get('quantity', 1)))  # Ensure minimum quantity of 1
         
         order = Order.objects.create(
