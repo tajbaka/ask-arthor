@@ -121,48 +121,55 @@ def get_menu(request) -> JsonResponse:
 @csrf_exempt
 @require_http_methods(["POST"])
 def vapi_webhook(request):
-    """Handle VAPI webhook requests"""
+    """Handle VAPI webhook requests - Returns all menu items"""
     try:
-        # Log incoming request
-        logger.info("Received webhook request")
-        logger.info(f"Request body: {request.body.decode()}")
+        # Log raw request for debugging
+        logger.info("=== Webhook Request Details ===")
+        logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Body: {request.body.decode()}")
+        logger.info("============================")
         
         data = json.loads(request.body)
-        message = data.get('message', {}).get('text', '')
-        conversation_id = data.get('conversation_id', '')
-        
-        logger.info(f"Processing message: {message}")
+        tool_call_id = data.get('toolCallId', '')
         
         try:
-            # Search directly using find_similar_items
-            similar_items = find_similar_items(message)
+            # Get all menu items
+            menu_items = MenuItem.objects.all()
             
-            if similar_items:
-                menu_text = "\n".join(
-                    f"{item.name} (${item.price}) - {item.description}"
-                    for item in similar_items
+            if menu_items:
+                # Format menu items into sections
+                menu_text = "Here's our current menu:\n\n"
+                
+                # Group by categories if you have them, or just list all items
+                menu_text += "\n".join(
+                    f"• {item.name} (${item.price})\n  {item.description}"
+                    for item in menu_items
                 )
-                response_text = f"I found these menu items:\n\n{menu_text}\n\nWould you like to know more about any of these items?"
+                
+                menu_text += "\n\nWhat would you like to know more about?"
+                response_text = menu_text
             else:
-                response_text = "I couldn't find any menu items matching your request. Can I help you find something else?"
+                response_text = "I apologize, but our menu is currently being updated. Please check back soon!"
 
-            logger.info(f"Found {len(similar_items)} items")
+            logger.info(f"Found {len(menu_items)} menu items")
             
         except Exception as e:
-            logger.error(f"Search failed: {str(e)}")
-            response_text = "I'm having trouble searching our menu right now. Please try again in a moment."
+            logger.error(f"Menu retrieval failed: {str(e)}")
+            response_text = "I'm having trouble accessing our menu right now. Please try again in a moment."
 
         logger.info(f"Sending response: {response_text}")
         return JsonResponse({
-            "messages": [{
-                "text": response_text,
-                "conversation_id": conversation_id
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": response_text
             }]
         })
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
+        logger.exception("Full traceback:")
         return JsonResponse({
-            "messages": [{
-                "text": "Sorry, I'm having trouble with the menu right now."
+            "results": [{
+                "toolCallId": data.get('toolCallId', ''),
+                "result": "Sorry, I'm having trouble accessing the menu right now."
             }]
         })
