@@ -330,10 +330,9 @@ def vapi_order_webhook(request):
         function_args = order_tool_call.get('function', {}).get('arguments', {})
         logger.info(f"Function arguments: {json.dumps(function_args, indent=2)}")
             
-        # Extract order details from the orders object
-        orders = function_args.get('orders', {})
-        query = orders.get('name', '').strip()
-        quantity = orders.get('quantity', 1)
+        # Extract order details - now using "Order" field directly
+        query = function_args.get('Order', '').strip()
+        quantity = 1  # Default quantity since it's not specified in new format
         
         if query:
             logger.info(f"Found order in arguments - Item: '{query}', Quantity: {quantity}")
