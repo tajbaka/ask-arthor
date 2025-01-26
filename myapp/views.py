@@ -126,15 +126,18 @@ def get_menu(request) -> JsonResponse:
 
 @csrf_exempt
 @require_http_methods(["POST"])
-def vapi_webhook(request):
+def vapi_menu_webhook(request):
     """Handle VAPI webhook requests - Returns all menu items"""
     try:
-        # Log received request
         received = json.loads(request.body)
         
-        # Extract tool call ID from the received data
+        # Find the menu tool call
         tool_calls = received.get('message', {}).get('toolCalls', [])
-        tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
+        menu_tool_call = next(
+            (call for call in tool_calls if call.get('function', {}).get('name') == 'menu'),
+            None
+        )
+        tool_call_id = menu_tool_call['id'] if menu_tool_call else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
         try:
             # Get all menu items
@@ -304,9 +307,15 @@ def vapi_order_webhook(request):
         messages = received.get('messagesOpenAIFormatted', [])
         tool_calls = received.get('message', {}).get('toolCalls', [])
         
+        # Find the addorder tool call
+        order_tool_call = next(
+            (call for call in tool_calls if call.get('function', {}).get('name') == 'addorder'),
+            None
+        )
+        
         # Validate tool calls
-        if not tool_calls:
-            logger.warning("No tool calls found in request")
+        if not order_tool_call:
+            logger.warning("No order tool call found in request")
             return JsonResponse({
                 "results": [{
                     "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
@@ -315,8 +324,8 @@ def vapi_order_webhook(request):
                 }]
             })
             
-        tool_call_id = tool_calls[0]['id']
-        function_args = tool_calls[0].get('function', {}).get('arguments', {})
+        tool_call_id = order_tool_call['id']
+        function_args = order_tool_call.get('function', {}).get('arguments', {})
         query = function_args.get('query', '').strip()
         
         # If no query provided, try to infer from conversation
@@ -590,3 +599,136 @@ def delete_order(request, order_id: int) -> JsonResponse:
             'status': 'error',
             'message': str(e)
         }, status=500)
+
+def infer_order_removal_from_conversation(messages) -> tuple[str, int]:
+    """Use OpenAI to infer which order to remove from conversation"""
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        formatted_messages = [
+            {"role": "system", "content": "You are a helpful assistant that extracts order removal details from conversations. Return ONLY the item name and order ID (if mentioned) in format: 'item_name|order_id'. Example: 'Margherita Pizza|1'. Use empty order_id if not specified: 'Margherita Pizza|'"},
+        ]
+        
+        for msg in messages:
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+            if role and content:
+                formatted_messages.append({"role": role, "content": content})
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=formatted_messages,
+            temperature=0
+        )
+        
+        result = response.choices[0].message.content.strip()
+        item_name, order_id = result.split('|')
+        return item_name.strip(), int(order_id) if order_id.strip() else None
+        
+    except Exception as e:
+        logger.error(f"Error inferring order removal: {str(e)}")
+        return None, None
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def vapi_remove_order_webhook(request):
+    """Handle VAPI remove order webhook requests"""
+    try:
+        received = json.loads(request.body)
+        logger.info(f"Received remove order request: {json.dumps(received, indent=2)}")
+        
+        messages = received.get('messagesOpenAIFormatted', [])
+        tool_calls = received.get('message', {}).get('toolCalls', [])
+        
+        # Find the removeorder tool call
+        remove_tool_call = next(
+            (call for call in tool_calls if call.get('function', {}).get('name') == 'removeorder'),
+            None
+        )
+        
+        # Validate tool calls
+        if not remove_tool_call:
+            logger.warning("No remove order tool call found in request")
+            return JsonResponse({
+                "results": [{
+                    "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+                    "result": "Which order would you like to remove?",
+                    "name": "order"
+                }]
+            })
+            
+        tool_call_id = remove_tool_call['id']
+        function_args = remove_tool_call.get('function', {}).get('arguments', {})
+        query = function_args.get('query', '').strip()
+        order_id = function_args.get('order_id')
+        
+        # If no query provided, try to infer from conversation
+        if not (query or order_id) and messages:
+            logger.info("No query/order_id provided, inferring from conversation...")
+            inferred_item, inferred_order_id = infer_order_removal_from_conversation(messages)
+            if inferred_item:
+                query = inferred_item
+            if inferred_order_id:
+                order_id = inferred_order_id
+            logger.info(f"Inferred removal: item='{inferred_item}', order_id={inferred_order_id}")
+        
+        # Try to find the order to remove
+        if order_id:
+            try:
+                order = Order.objects.get(id=order_id)
+                order.delete()
+                logger.info(f"Removed order #{order_id}")
+                response_text = f"I've removed order #{order_id} from your orders."
+            except Order.DoesNotExist:
+                logger.warning(f"Order #{order_id} not found")
+                response_text = f"I couldn't find order #{order_id}. Would you like to see your current orders?"
+        elif query:
+            # Try to find orders with matching items
+            matching_orders = Order.objects.filter(items__item_name__icontains=query.lower())
+            if matching_orders:
+                if matching_orders.count() == 1:
+                    order = matching_orders[0]
+                    order_id = order.id
+                    order.delete()
+                    logger.info(f"Removed order #{order_id} containing '{query}'")
+                    response_text = f"I've removed order #{order_id} containing {query}."
+                else:
+                    # Multiple matches found
+                    order_list = ", ".join([f"#{o.id}" for o in matching_orders])
+                    logger.info(f"Multiple orders found containing '{query}': {order_list}")
+                    response_text = f"I found multiple orders with {query}: {order_list}. Which order would you like to remove?"
+            else:
+                logger.warning(f"No orders found containing '{query}'")
+                response_text = f"I couldn't find any orders containing '{query}'. Would you like to see your current orders?"
+        else:
+            logger.warning("No order identification provided")
+            response_text = "I'm not sure which order you'd like to remove. Could you specify the order number or item?"
+        
+        # If we removed an order, broadcast the update
+        if order_id:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "orders",
+                {
+                    "type": "orders_update",
+                    "orders": async_to_sync(OrderConsumer().get_orders)()
+                }
+            )
+        
+        return JsonResponse({
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": response_text,
+                "name": "order"
+            }]
+        })
+            
+    except Exception as e:
+        logger.error(f"Remove order webhook error: {str(e)}", exc_info=True)
+        return JsonResponse({
+            "results": [{
+                "toolCallId": tool_call_id if 'tool_call_id' in locals() else "0dca5b3f-59c3-4236-9784-84e560fb26ef",
+                "result": "Sorry, I'm having trouble removing the order right now.",
+                "name": "order"
+            }]
+        })
