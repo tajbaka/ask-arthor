@@ -123,11 +123,9 @@ def get_menu(request) -> JsonResponse:
 def vapi_webhook(request):
     """Handle VAPI webhook requests - Returns all menu items"""
     try:
-        # Log raw request for debugging
-        logger.info("=== Webhook Request Details ===")
-        logger.info(f"Headers: {dict(request.headers)}")
-        logger.info(f"Body: {request.body.decode()}")
-        logger.info("============================")
+        # Log received request
+        received = json.loads(request.body)
+        logger.info(f"Received: {json.dumps(received)}")
         
         # Hardcode the tool ID
         tool_call_id = "0dca5b3f-59c3-4236-9784-84e560fb26ef"
@@ -151,25 +149,34 @@ def vapi_webhook(request):
             else:
                 response_text = "I apologize, but our menu is currently being updated. Please check back soon!"
 
-            logger.info(f"Found {len(menu_items)} menu items")
+            response = {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": response_text
+                }]
+            }
+            logger.info(f"Response: {json.dumps(response)}")
+            return JsonResponse(response)
             
         except Exception as e:
             logger.error(f"Menu retrieval failed: {str(e)}")
             response_text = "I'm having trouble accessing our menu right now. Please try again in a moment."
-
-        logger.info(f"Sending response: {response_text}")
-        return JsonResponse({
-            "results": [{
-                "toolCallId": tool_call_id,
-                "result": response_text
-            }]
-        })
+            response = {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": response_text
+                }]
+            }
+            logger.info(f"Error Response: {json.dumps(response)}")
+            return JsonResponse(response)
+            
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
-        logger.exception("Full traceback:")
-        return JsonResponse({
+        response = {
             "results": [{
                 "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
                 "result": "Sorry, I'm having trouble accessing the menu right now."
             }]
-        })
+        }
+        logger.info(f"Error Response: {json.dumps(response)}")
+        return JsonResponse(response)
