@@ -689,8 +689,13 @@ def vapi_remove_order_webhook(request):
                 }]
             })
         
-        # Find matching items in the order
-        matching_items = current_order.items.filter(item_name__icontains=query.lower())
+        # Find matching items in the order - make case insensitive
+        query = query.lower()  # Convert query to lowercase
+        matching_items = current_order.items.filter(item_name__iexact=query)  # Exact match but case insensitive
+        
+        if not matching_items:
+            # Try partial match if exact match fails
+            matching_items = current_order.items.filter(item_name__icontains=query)
         
         if not matching_items:
             logger.warning(f"No items found matching: '{query}'")
@@ -705,8 +710,11 @@ def vapi_remove_order_webhook(request):
         # Remove the first matching item
         item = matching_items[0]
         item_name = item.item_name
-        item_price = item.item_price
+        logger.info(f"Found matching item: {item_name}")
+        
+        # Delete the item
         item.delete()
+        logger.info(f"Deleted item from database")
         
         # Update order total
         current_order.total_amount = sum(
@@ -714,16 +722,7 @@ def vapi_remove_order_webhook(request):
             for item in current_order.items.all()
         )
         current_order.save()
-        
-        # If order is empty, delete it
-        if current_order.items.count() == 0:
-            current_order.delete()
-            response_text = f"I've removed {item_name} from your order. Your order is now empty."
-        else:
-            response_text = (f"I've removed {item_name} from your order. "
-                           f"New total: ${current_order.total_amount}")
-        
-        logger.info(f"Removed item: {item_name}")
+        logger.info(f"Updated order total: ${current_order.total_amount}")
         
         # Broadcast order update via WebSocket
         channel_layer = get_channel_layer()
@@ -734,6 +733,9 @@ def vapi_remove_order_webhook(request):
                 "orders": async_to_sync(OrderConsumer().get_orders)()
             }
         )
+        
+        response_text = (f"I've removed {item_name} from your order. "
+                       f"New total: ${current_order.total_amount}")
         
         return JsonResponse({
             "results": [{
