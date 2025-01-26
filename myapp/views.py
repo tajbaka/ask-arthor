@@ -641,6 +641,13 @@ def vapi_remove_order_webhook(request):
         
         # Get function arguments
         function_args = remove_tool_call.get('function', {}).get('arguments', {})
+        if isinstance(function_args, str):
+            try:
+                function_args = json.loads(function_args)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse function arguments string: {function_args}")
+                function_args = {}
+
         logger.info(f"Function arguments: {json.dumps(function_args, indent=2)}")
             
         # Extract order details - now using "Order" field directly
