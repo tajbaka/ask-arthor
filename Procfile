@@ -1,1 +1,1 @@
-web: gunicorn mysite.wsgi 
+web: daphne mysite.asgi:application -b 0.0.0.0 -p $PORT 

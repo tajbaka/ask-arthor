@@ -32,3 +32,4 @@ typing_extensions==4.12.2
 urllib3==2.3.0
 channels>=4.0.0
 daphne>=4.0.0
+django-cors-headers>=4.3.1
