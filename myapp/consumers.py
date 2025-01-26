@@ -1,7 +1,7 @@
 from channels.generic.websocket import AsyncWebsocketConsumer
 import json
 from channels.db import database_sync_to_async
-from .models import Order
+from django.apps import apps
 
 class OrderConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -22,6 +22,8 @@ class OrderConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def get_orders(self):
         """Get all orders from database"""
+        # Get Order model after apps are ready
+        Order = apps.get_model('myapp', 'Order')
         orders = Order.objects.all().order_by('-created_at')
         return [{
             'id': order.id,
@@ -30,7 +32,6 @@ class OrderConsumer(AsyncWebsocketConsumer):
             'created_at': order.created_at.isoformat(),
             'total_amount': str(order.total_amount),
             'special_instructions': order.special_instructions,
-            'menu_item_id': str(order.menu_item.id) if order.menu_item else None,
             'item_name': order.item_name,
             'quantity': order.quantity,
             'item_price': str(order.item_price)
