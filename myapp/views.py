@@ -393,9 +393,8 @@ def vapi_order_webhook(request):
             
         menu_item = similar_items[0]
         
-        # Create order with direct menu item reference
+        # Create order with direct item information
         order = Order.objects.create(
-            menu_item=menu_item,
             quantity=quantity,
             item_name=menu_item.name,
             item_price=menu_item.price,
@@ -416,7 +415,6 @@ def vapi_order_webhook(request):
                 "result": response_text,
                 "name": "order",
                 "order_id": str(order.id),
-                "menu_item_id": str(menu_item.id),
                 "quantity": quantity
             }]
         })
@@ -499,7 +497,6 @@ def get_order(request, order_id: int) -> JsonResponse:
                 'created_at': order.created_at.isoformat(),
                 'total_amount': str(order.total_amount),
                 'special_instructions': order.special_instructions,
-                'menu_item_id': str(order.menu_item.id) if order.menu_item else None,
                 'item_name': order.item_name,
                 'quantity': order.quantity,
                 'item_price': str(order.item_price)
