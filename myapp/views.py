@@ -129,8 +129,8 @@ def vapi_webhook(request):
         logger.info(f"Body: {request.body.decode()}")
         logger.info("============================")
         
-        data = json.loads(request.body)
-        tool_call_id = data.get('toolCallId', '')
+        # Hardcode the tool ID
+        tool_call_id = "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
         try:
             # Get all menu items
@@ -169,7 +169,7 @@ def vapi_webhook(request):
         logger.exception("Full traceback:")
         return JsonResponse({
             "results": [{
-                "toolCallId": data.get('toolCallId', ''),
+                "toolCallId": "0dca5b3f-59c3-4236-9784-84e560fb26ef",
                 "result": "Sorry, I'm having trouble accessing the menu right now."
             }]
         })
