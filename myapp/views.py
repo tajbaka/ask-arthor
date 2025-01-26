@@ -265,19 +265,20 @@ def vapi_order_webhook(request):
         received = json.loads(request.body)
         logger.info(f"Received order: {json.dumps(received, indent=2)}")
         
-        # Extract tool call ID from the received data
+        # Extract tool call ID and arguments
         tool_calls = received.get('message', {}).get('toolCalls', [])
         tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
-        # Check if we have any order details
+        # Get function arguments
         function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
+        query = function_args.get('query', '')
         
-        if not function_args:
-            response_text = ("I don't see any order details. Please specify what items you'd like to order. "
-                           "You can tell me the name of the item and quantity you want.")
+        if query:
+            response_text = (f"I see you're interested in ordering '{query}'. "
+                           f"Is this correct?")
         else:
-            response_text = "Thank you for your order! I've received the following details:\n\n"
-            response_text += json.dumps(function_args, indent=2)
+            response_text = ("I don't see any specific order details. "
+                           "What would you like to order? You can tell me the name of the item.")
         
         response = {
             "results": [{
