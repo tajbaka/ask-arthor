@@ -272,6 +272,8 @@ def vapi_order_webhook(request):
         function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
         query = function_args.get('query', '')
         
+        logger.info(f"Looking for menu item matching: '{query}'")
+        
         if query:
             # Create a new order
             order = Order.objects.create(
@@ -279,19 +281,28 @@ def vapi_order_webhook(request):
                 special_instructions=function_args.get('special_instructions', '')
             )
             
-            # Try to find matching menu item
+            # Try to find matching menu item with better logging
             menu_items = MenuItem.objects.filter(name__icontains=query)
+            logger.info(f"Found {menu_items.count()} matching menu items")
+            
             if menu_items:
                 item = menu_items[0]
-                OrderItem.objects.create(
+                logger.info(f"Selected menu item: {item.name} (${item.price})")
+                
+                # Create order item
+                order_item = OrderItem.objects.create(
                     order=order,
                     menu_item=item,
                     quantity=function_args.get('quantity', 1),
                     item_name=item.name,
                     item_price=item.price
                 )
+                
+                # Update order total
                 order.total_amount = item.price * function_args.get('quantity', 1)
                 order.save()
+                
+                logger.info(f"Created order #{order.id} with item: {order_item.item_name} x{order_item.quantity}")
                 
                 # Broadcast order update
                 channel_layer = get_channel_layer()
@@ -306,6 +317,7 @@ def vapi_order_webhook(request):
                 response_text = (f"I've created order #{order.id} for {query}. "
                                f"Total amount: ${order.total_amount}")
             else:
+                logger.warning(f"No menu items found matching: '{query}'")
                 response_text = f"I couldn't find '{query}' on our menu. Would you like to see our menu?"
         else:
             response_text = ("I don't see any specific order details. "
