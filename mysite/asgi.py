@@ -15,11 +15,12 @@ django.setup()
 # Import routing after Django is set up
 from myapp.routing import websocket_urlpatterns
 
+# Initialize Django ASGI application early
+django_asgi_app = get_asgi_application()
+
 application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
+    "http": django_asgi_app,
     "websocket": AuthMiddlewareStack(
-        URLRouter(
-            websocket_urlpatterns
-        )
+        URLRouter(websocket_urlpatterns)
     ),
 }) 
