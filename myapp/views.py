@@ -366,7 +366,7 @@ def vapi_order_webhook(request):
     """Handle VAPI order webhook requests"""
     try:
         received = json.loads(request.body)
-        logger.info(f"Received order: {json.dumps(received, indent=2)}")
+        # logger.info(f"Received order: {json.dumps(received, indent=2)}")
         
         # Get addorder tool call
         order_tool_call = get_tool_call(received, 'addorder')
@@ -622,7 +622,7 @@ def vapi_remove_order_webhook(request):
     """Handle VAPI remove order webhook requests"""
     try:
         received = json.loads(request.body)
-        logger.info(f"Received remove order request: {json.dumps(received, indent=2)}")
+        # logger.info(f"Received remove order request: {json.dumps(received, indent=2)}")
         
         # Get removeorder tool call using helper function
         remove_tool_call = get_tool_call(received, 'removeorder')
