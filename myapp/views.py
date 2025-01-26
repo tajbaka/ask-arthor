@@ -600,46 +600,49 @@ def vapi_remove_order_webhook(request):
         tool_call_id = remove_tool_call['id']
         logger.info(f"Processing remove order tool call: {tool_call_id}")
         
-        # Get the order ID from arguments
+        # Get the order name from arguments
         function_args = remove_tool_call.get('function', {}).get('arguments', {})
         if isinstance(function_args, str):
             function_args = json.loads(function_args)
         
         order_data = function_args.get('Order', {})
-        order_id = order_data.get('id')
-        logger.info(f"Attempting to remove order #{order_id}")
+        order_name = order_data.get('name', '').strip()
+        logger.info(f"Looking for order with name: {order_name}")
         
-        if not order_id:
-            logger.warning("No order ID provided in request")
+        if not order_name:
+            logger.warning("No order name provided")
             return create_error_response(
                 tool_call_id,
                 "Which order would you like to remove?"
             )
         
-        try:
-            order = Order.objects.get(id=order_id)
-            item_name = order.item_name
-            logger.info(f"Found order #{order_id}: {item_name} x{order.quantity}")
-            order.delete()
-            logger.info(f"Successfully deleted order #{order_id}")
-            
-            broadcast_order_update()
-            
-            return JsonResponse({
-                "results": [{
-                    "toolCallId": tool_call_id,
-                    "result": f"I've removed order #{order_id} ({item_name}).",
-                    "name": "order",
-                    "order_id": str(order_id)
-                }]
-            })
-            
-        except Order.DoesNotExist:
-            logger.warning(f"Order #{order_id} not found")
+        # Find most recent order matching the name
+        orders = Order.objects.filter(item_name__icontains=order_name).order_by('-created_at')
+        if not orders.exists():
+            logger.warning(f"No orders found with name: {order_name}")
             return create_error_response(
                 tool_call_id,
-                f"I couldn't find order #{order_id}. Would you like to see your current orders?"
+                f"I couldn't find any orders for '{order_name}'. Would you like to see your current orders?"
             )
+        
+        order = orders.first()
+        item_name = order.item_name
+        order_id = order.id
+        logger.info(f"Found order #{order_id}: {item_name} x{order.quantity}")
+        
+        order.delete()
+        logger.info(f"Successfully deleted order #{order_id}")
+        
+        broadcast_order_update()
+        
+        return JsonResponse({
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": f"I've removed order #{order_id} ({item_name}).",
+                "name": "order",
+                "order_id": str(order_id)
+            }]
+        })
             
     except Exception as e:
         logger.error(f"Remove order webhook error: {str(e)}", exc_info=True)
