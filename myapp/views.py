@@ -262,13 +262,13 @@ def replace_menu(request) -> JsonResponse:
         }, status=400)
 
 def infer_order_from_conversation(messages) -> tuple[str, int]:
-    """Use OpenAI to infer order details from conversation history"""
+    """Use OpenAI to infer order details from conversations"""
     try:
         client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         # Format messages for OpenAI
         formatted_messages = [
-            {"role": "system", "content": "You are a helpful assistant that extracts order details from conversations. Return ONLY the item name and quantity in format: 'item_name|quantity'. Example: 'Margherita Pizza|2'"},
+            {"role": "system", "content": "You are a helpful assistant that extracts order details from conversations. Return ONLY the item name and quantity in format: 'item_name|quantity'. Example: 'Margherita Pizza|1'"},
         ]
         
         # Add conversation history
