@@ -30,3 +30,5 @@ types-setuptools==75.8.0.20250110
 types-urllib3==1.26.25.14
 typing_extensions==4.12.2
 urllib3==2.3.0
+channels>=4.0.0
+daphne>=4.0.0

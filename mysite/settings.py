@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'myapp',
+    'channels',
 ]
 
 MIDDLEWARE = [
@@ -112,3 +113,11 @@ LOGGING = {
 
 # Add near the bottom with other settings
 API_BASE_URL = os.getenv('API_BASE_URL', 'http://127.0.0.1:8000')  # Default to local for development
+
+# Channels configuration
+ASGI_APPLICATION = 'mysite.asgi.application'
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    }
+}

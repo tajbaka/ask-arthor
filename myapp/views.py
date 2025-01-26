@@ -8,6 +8,8 @@ from typing import Dict, List, Any
 from django.core.exceptions import ImproperlyConfigured
 import logging
 import requests
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +293,16 @@ def vapi_order_webhook(request):
                 order.total_amount = item.price * function_args.get('quantity', 1)
                 order.save()
                 
+                # Broadcast order update
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    "orders",
+                    {
+                        "type": "orders_update",
+                        "orders": async_to_sync(OrderConsumer().get_orders)()
+                    }
+                )
+                
                 response_text = (f"I've created order #{order.id} for {query}. "
                                f"Total amount: ${order.total_amount}")
             else:
@@ -322,11 +334,29 @@ def vapi_order_webhook(request):
 
 @require_http_methods(["GET"])
 def get_orders(request) -> JsonResponse:
-    """Get all orders with their items"""
+    """Get all orders with pagination and filtering"""
     try:
-        orders = Order.objects.all().order_by('-created_at')  # Most recent first
-        orders_list = []
+        # Get query parameters
+        page = int(request.GET.get('page', 1))
+        per_page = int(request.GET.get('per_page', 10))
+        status = request.GET.get('status', None)
         
+        # Start with all orders
+        orders = Order.objects.all()
+        
+        # Apply filters
+        if status:
+            orders = orders.filter(status=status)
+            
+        # Get total count before pagination
+        total_count = orders.count()
+        
+        # Order by most recent first and paginate
+        start = (page - 1) * per_page
+        end = start + per_page
+        orders = orders.order_by('-created_at')[start:end]
+        
+        orders_list = []
         for order in orders:
             order_items = [{
                 'item_name': item.item_name,
@@ -347,11 +377,54 @@ def get_orders(request) -> JsonResponse:
         
         return JsonResponse({
             'status': 'success',
-            'orders': orders_list
+            'orders': orders_list,
+            'pagination': {
+                'current_page': page,
+                'per_page': per_page,
+                'total_items': total_count,
+                'total_pages': (total_count + per_page - 1) // per_page
+            }
         })
     
     except Exception as e:
         logger.error(f"Get orders error: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
+
+@require_http_methods(["GET"])
+def get_order(request, order_id: int) -> JsonResponse:
+    """Get a specific order by ID"""
+    try:
+        order = Order.objects.get(id=order_id)
+        
+        order_items = [{
+            'item_name': item.item_name,
+            'quantity': item.quantity,
+            'price': str(item.item_price),
+            'special_instructions': item.special_instructions
+        } for item in order.items.all()]
+        
+        return JsonResponse({
+            'status': 'success',
+            'order': {
+                'id': order.id,
+                'status': order.status,
+                'customer_name': order.customer_name,
+                'created_at': order.created_at.isoformat(),
+                'total_amount': str(order.total_amount),
+                'special_instructions': order.special_instructions,
+                'items': order_items
+            }
+        })
+    except Order.DoesNotExist:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Order with id {order_id} not found'
+        }, status=404)
+    except Exception as e:
+        logger.error(f"Get order error: {str(e)}")
         return JsonResponse({
             'status': 'error',
             'message': str(e)
