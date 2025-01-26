@@ -129,11 +129,38 @@ CHANNEL_LAYERS = {
     }
 }
 
-# Add CORS settings
-CORS_ALLOW_ALL_ORIGINS = True  # For development only
+# Update CORS settings
+CORS_ALLOW_ALL_ORIGINS = False  # Set to False in production
+
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "https://your-frontend-domain.com",
+    "https://stellar-gingersnap-137a05.netlify.app",  # Your frontend domain
+    "http://localhost:3000",  # For local development
+]
+
+# Allow credentials
+CORS_ALLOW_CREDENTIALS = True
+
+# Allow specific HTTP methods
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+# Allow specific headers
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
 ]
 
 # Allow WebSocket connections
