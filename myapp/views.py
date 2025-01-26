@@ -327,11 +327,15 @@ def vapi_order_webhook(request):
             
         tool_call_id = order_tool_call['id']
         
-        # Get function arguments - need to parse the JSON string
-        function_args = order_tool_call.get('function', {}).get('arguments', '{}')
+        # Get function arguments
+        function_args = order_tool_call.get('function', {}).get('arguments', {})
         try:
-            # First parse - converts the string to dict
-            parsed_args = json.loads(function_args)
+            # Handle both string and dict formats
+            if isinstance(function_args, str):
+                parsed_args = json.loads(function_args)
+            else:
+                parsed_args = function_args
+                
             # Get the Order object
             order_data = parsed_args.get('Order', {})
             # Extract name and quantity
