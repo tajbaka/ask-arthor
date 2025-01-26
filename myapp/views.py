@@ -108,6 +108,7 @@ def get_menu(request) -> JsonResponse:
     """Get all menu items"""
     items = MenuItem.objects.all()
     menu_items = [{
+        'id': item.id,
         'name': item.name,
         'price': str(item.price),
         'description': item.description
@@ -184,3 +185,74 @@ def vapi_webhook(request):
         }
         logger.info(f"Error Response: {json.dumps(response)}")
         return JsonResponse(response)
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def delete_menu_item(request, item_id: int) -> JsonResponse:
+    """Delete a menu item by ID"""
+    try:
+        item = MenuItem.objects.get(id=item_id)
+        name = item.name  # Store name before deletion for response
+        item.delete()
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Successfully deleted menu item: {name}',
+            'deleted_id': item_id
+        })
+    except MenuItem.DoesNotExist:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Menu item with id {item_id} not found'
+        }, status=404)
+    except Exception as e:
+        logger.error(f"Delete error: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=400)
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def replace_menu(request) -> JsonResponse:
+    """Replace entire menu with new items"""
+    try:
+        data: List[Dict[str, Any]] = json.loads(request.body)
+        
+        # Delete all existing items
+        MenuItem.objects.all().delete()
+        
+        # Create new items
+        new_items = []
+        for item_data in data:
+            item = MenuItem.objects.create(
+                name=item_data['name'],
+                description=item_data.get('description', ''),
+                price=float(item_data['price'])
+            )
+            
+            # Generate and store embedding
+            text = f"{item.name} {item.description}"
+            embedding = get_embedding(text)
+            item.set_embedding(embedding)
+            item.save()
+            
+            new_items.append({
+                'id': item.id,
+                'name': item.name,
+                'price': str(item.price),
+                'description': item.description
+            })
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Menu replaced with {len(new_items)} items',
+            'items': new_items
+        })
+    
+    except Exception as e:
+        logger.error(f"Replace menu error: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=400)

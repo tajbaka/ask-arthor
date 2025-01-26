@@ -9,4 +9,6 @@ urlpatterns = [
     path('menu/update/', views.update_menu, name='update_menu'),
     path('menu/search/', views.search_menu, name='search_menu'),
     path('vapi/webhook/', views.vapi_webhook, name='vapi_webhook'),
+    path('menu/<int:item_id>/', views.delete_menu_item, name='delete_menu_item'),
+    path('menu/replace/', views.replace_menu, name='replace_menu'),
 ]
