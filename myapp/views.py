@@ -10,6 +10,8 @@ import logging
 import requests
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from openai import OpenAI
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +260,38 @@ def replace_menu(request) -> JsonResponse:
             'message': str(e)
         }, status=400)
 
+def infer_order_from_conversation(messages) -> tuple[str, int]:
+    """Use OpenAI to infer order details from conversation history"""
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Format messages for OpenAI
+        formatted_messages = [
+            {"role": "system", "content": "You are a helpful assistant that extracts order details from conversations. Return ONLY the item name and quantity in format: 'item_name|quantity'. Example: 'Margherita Pizza|2'"},
+        ]
+        
+        # Add conversation history
+        for msg in messages:
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+            if role and content:
+                formatted_messages.append({"role": role, "content": content})
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=formatted_messages,
+            temperature=0
+        )
+        
+        # Parse response
+        result = response.choices[0].message.content.strip()
+        item_name, quantity = result.split('|')
+        return item_name.strip(), int(quantity)
+        
+    except Exception as e:
+        logger.error(f"Error inferring order: {str(e)}")
+        return None, 1
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def vapi_order_webhook(request):
@@ -266,17 +300,21 @@ def vapi_order_webhook(request):
         received = json.loads(request.body)
         logger.info(f"Received order: {json.dumps(received, indent=2)}")
         
-        # Extract the last user message to get the order details
         messages = received.get('messagesOpenAIFormatted', [])
-        last_user_message = next((msg['content'] for msg in reversed(messages) 
-                                if msg.get('role') == 'user'), '')
-        
         tool_calls = received.get('message', {}).get('toolCalls', [])
         tool_call_id = tool_calls[0]['id'] if tool_calls else "0dca5b3f-59c3-4236-9784-84e560fb26ef"
         
-        # Try to get query from arguments or last user message
         function_args = tool_calls[0].get('function', {}).get('arguments', {}) if tool_calls else {}
-        query = function_args.get('query', '') or last_user_message
+        query = function_args.get('query', '')
+        
+        # If no query provided, try to infer from conversation
+        if not query and messages:
+            logger.info("No query provided, inferring from conversation...")
+            inferred_item, inferred_quantity = infer_order_from_conversation(messages)
+            if inferred_item:
+                query = inferred_item
+                function_args['quantity'] = inferred_quantity
+                logger.info(f"Inferred order: {inferred_quantity}x {inferred_item}")
         
         logger.info(f"Looking for menu item matching: '{query}'")
         
@@ -287,9 +325,9 @@ def vapi_order_webhook(request):
             )
             
             # Try to find matching menu item with fuzzy matching
-            menu_items = MenuItem.objects.filter(name__icontains='margherita')  # Handle common spelling
+            menu_items = MenuItem.objects.filter(name__icontains='margherita')
             if not menu_items:
-                menu_items = MenuItem.objects.filter(name__icontains='margarita')  # Alternative spelling
+                menu_items = MenuItem.objects.filter(name__icontains='margarita')
                 
             logger.info(f"Found {menu_items.count()} matching menu items")
             
