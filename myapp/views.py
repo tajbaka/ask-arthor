@@ -326,15 +326,8 @@ def vapi_order_webhook(request):
             
         tool_call_id = order_tool_call['id']
         
-        # Get function arguments - handle both string and dict formats
+        # Get function arguments
         function_args = order_tool_call.get('function', {}).get('arguments', {})
-        if isinstance(function_args, str):
-            try:
-                function_args = json.loads(function_args)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse function arguments string: {function_args}")
-                function_args = {}
-        
         logger.info(f"Function arguments: {json.dumps(function_args, indent=2)}")
             
         # Extract order details from the orders object
