@@ -157,7 +157,7 @@ def vapi_webhook(request):
                     "name": "menu"
                 }]
             }
-            logger.info(f"Response: {json.dumps(response)}")
+            # logger.info(f"Response: {json.dumps(response)}")
             return JsonResponse(response)
             
         except Exception as e:
@@ -281,7 +281,7 @@ def vapi_order_webhook(request):
             }]
         }
         
-        logger.info(f"Order Response: {json.dumps(response)}")
+        # logger.info(f"Order Response: {json.dumps(response)}")
         return JsonResponse(response)
             
     except Exception as e:
